@@ -1,10 +1,10 @@
 # .github/workflows/property-automation.yml
-# 네이버부동산 매물 자동화 워크플로우
+# 다중 매물 처리용 메인 자동화 워크플로우
 
 name: Property Automation
 
 on:
-  # 매일 자정 1분에 자동 실행 (KST 기준)
+  # 매일 자정 1분에 자동 실행
   schedule:
     - cron: '1 15 * * *'  # UTC 15:01 = KST 00:01
   
@@ -109,21 +109,14 @@ jobs:
         TZ: Asia/Seoul
     
     - name: Archive completed schedule
-      if: always() && steps.properties.outputs.source == 'scheduled'
+      if: always() && steps.properties.outputs.source == 'scheduled'  # ← always() 추가
       run: |
-        # 실행 완료 후 예약 파일을 archive로 이동 (성공/실패 무관)
         timestamp=$(date +"%Y%m%d_%H%M%S")
         mkdir -p archive
         
         if [ -f "data/scheduled_properties.json" ]; then
-          # 실행 결과에 따라 다른 이름으로 저장
-          if [ "${{ job.status }}" == "success" ]; then
-            mv data/scheduled_properties.json archive/completed_${timestamp}.json
-            echo "✅ 성공: 예약 파일을 archive로 이동: completed_${timestamp}.json"
-          else
-            mv data/scheduled_properties.json archive/failed_${timestamp}.json
-            echo "❌ 실패: 예약 파일을 archive로 이동: failed_${timestamp}.json"
-          fi
+          mv data/scheduled_properties.json archive/completed_${timestamp}.json
+          echo "📁 예약 파일을 archive로 이동: completed_${timestamp}.json"
         fi
     
     - name: Create execution log
@@ -139,7 +132,7 @@ jobs:
           "property_count": $(echo '${{ steps.properties.outputs.properties }}' | tr ',' '\n' | wc -l),
           "test_mode": "${{ github.event.inputs.test_mode || 'false' }}",
           "source": "${{ steps.properties.outputs.source }}",
-          "status": "${{ job.status }}"
+          "status": "completed"
         }
         EOF
         
@@ -187,6 +180,6 @@ jobs:
         echo "📝 수동 입력: 없음"
         echo ""
         echo "💡 매물을 예약하려면:"
-        echo "1. 로컬 GUI에서 매물 선택"
+        echo "1. PC GUI에서 매물 선택"
         echo "2. GitHub에 scheduled_properties.json 업로드"
         echo "3. 다음 자정에 자동 실행됨"

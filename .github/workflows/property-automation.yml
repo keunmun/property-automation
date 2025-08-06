@@ -6,7 +6,7 @@ name: Property Automation
 on:
   # 매일 자정 1분에 자동 실행
   schedule:
-    - cron: '1 15 * * *'  # UTC 15:01 = KST 00:01
+    - cron: '50 19 * * *'  # UTC 15:01 = KST 00:01
   
   # 수동 실행 (테스트용)
   workflow_dispatch:

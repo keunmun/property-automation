@@ -105,17 +105,16 @@ jobs:
         TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
         TZ: Asia/Seoul
     
-    - name: Archive completed schedule
-      if: always() && steps.properties.outputs.source == 'scheduled'  # ← always() 추가
+    - name: Delete completed schedule
+      if: always() && steps.properties.outputs.source == 'scheduled'
       run: |
-        timestamp=$(date +"%Y%m%d_%H%M%S")
-        mkdir -p archive
-        
         if [ -f "data/scheduled_properties.json" ]; then
-          mv data/scheduled_properties.json archive/completed_${timestamp}.json
-          echo "📁 예약 파일을 archive로 이동: completed_${timestamp}.json"
+          rm data/scheduled_properties.json
+          echo "🗑️ 예약 파일 삭제 완료: scheduled_properties.json"
+        else
+          echo "📝 삭제할 예약 파일이 없습니다."
         fi
-    
+
     - name: Create execution log
       if: always()
       run: |
@@ -143,7 +142,7 @@ jobs:
         git config --global user.email "action@github.com"
         git config --global user.name "GitHub Action"
 
-        git add archive/ results/ data/ || true
+        git add results/ data/ || true
         git commit -m "🤖 자동화 실행 완료 $(date +"%Y-%m-%d %H:%M:%S")" || echo "No changes to commit"
         git push || echo "Push failed or no changes"
     

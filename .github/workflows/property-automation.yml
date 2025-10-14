@@ -142,9 +142,34 @@ jobs:
         git config --global user.email "action@github.com"
         git config --global user.name "GitHub Action"
 
+        # 변경사항 확인
+        git status
+
+        # Pull 먼저 수행 (conflict 방지)
+        git pull --rebase || true
+
+        # 스테이징
         git add results/ data/ || true
-        git commit -m "🤖 자동화 실행 완료 $(date +"%Y-%m-%d %H:%M:%S")" || echo "No changes to commit"
-        git push || echo "Push failed or no changes"
+
+        # 커밋 (변경사항이 있을 때만)
+        if git diff --staged --quiet; then
+          echo "📝 변경사항 없음 - 커밋 건너뜀"
+        else
+          git commit -m "🤖 자동화 실행 완료 $(date +"%Y-%m-%d %H:%M:%S")"
+          echo "✅ 커밋 완료"
+
+          # Push (최대 3회 재시도)
+          for i in 1 2 3; do
+            if git push; then
+              echo "✅ Push 성공 (시도 $i)"
+              break
+            else
+              echo "⚠️ Push 실패 (시도 $i) - 재시도..."
+              sleep 2
+              git pull --rebase || true
+            fi
+          done
+        fi
     
     - name: Upload screenshots
       if: always()

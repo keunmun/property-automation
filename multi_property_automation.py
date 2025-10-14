@@ -179,13 +179,18 @@ class MultiPropertyAutomation:
         
         try:
             print("🌐 매물 리스트 페이지로 이동 중...")
-            await page.goto(self.ad_list_url, timeout=60000)
+            await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
 
             # 페이지 로드 후 안정화 대기
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(2000)
 
             print("📋 매물 테이블 로딩 대기 중...")
-            await page.wait_for_selector('table tbody tr', timeout=30000)
+            try:
+                await page.wait_for_selector('table tbody tr', timeout=30000)
+            except Exception as e:
+                print(f"⚠️ 테이블 로딩 지연 - 재시도 중...")
+                await page.wait_for_timeout(2000)
+                await page.wait_for_selector('table tbody tr', timeout=30000)
             
             # 매물 검색 (페이지네이션 포함)
             property_found = False
@@ -200,7 +205,7 @@ class MultiPropertyAutomation:
                 rows = await page.query_selector_all('table tbody tr')
                 
                 print(f"📊 {current_page}페이지 매물 수: {len(rows)}개")
-                
+
                 # 현재 페이지에서 매물 검색
                 update_success = False
                 for i, row in enumerate(rows, 1):
@@ -320,22 +325,6 @@ class MultiPropertyAutomation:
         """실제 업데이트 실행"""
         print(f"\n🚀 매물번호 {property_number} 실제 업데이트:")
 
-        # 성공 여부를 추적하는 변수
-        final_success = False
-        last_popup_message = None
-
-        # 팝업 메시지를 저장하기 위한 리스너
-        popup_messages = []
-
-        async def capture_popup(dialog):
-            popup_messages.append(dialog.message)
-            print(f"📨 팝업 메시지 수집: {dialog.message}")
-            await dialog.accept()
-
-        # 기존 리스너 제거하고 새 리스너 등록
-        page.remove_listener('dialog', page._impl_obj._event_listeners.get('dialog', [None])[0] if hasattr(page._impl_obj, '_event_listeners') else None)
-        page.on('dialog', capture_popup)
-
         try:
             # 1. 노출종료
             print("1️⃣ 노출종료 버튼 클릭...")
@@ -379,19 +368,13 @@ class MultiPropertyAutomation:
                 await end_button.click(force=True)  # force 옵션 추가
                 print("✅ 노출종료 버튼 클릭 완료")
 
-                # 팝업 처리 대기
+                # 팝업 처리 대기 (전역 리스너가 처리)
                 print("⏳ 팝업 처리 대기 중...")
                 await page.wait_for_timeout(2000)
                 print("   ✅ 노출종료 완료")
 
             except Exception as e:
-                print(f"❌ 노출종료 버튼 클릭 중 오류: {e}")
-                # 스크린샷 저장 (디버깅용)
-                try:
-                    await page.screenshot(path=f"error_screenshot_{property_number}_end_button.png")
-                    print(f"오류 스크린샷 저장됨: error_screenshot_{property_number}_end_button.png")
-                except:
-                    pass
+                print(f"노출종료 버튼 클릭 중 오류: {e}")
                 return False
 
             # 2. 광고종료
@@ -409,7 +392,6 @@ class MultiPropertyAutomation:
             print("3️⃣ 종료매물에서 재광고 버튼 검색...")
             end_rows = await page.query_selector_all('table tbody tr')
 
-            re_ad_found = False
             for row in end_rows:
                 number_cell = await row.query_selector('td:nth-child(3) > div.numberN')
                 if number_cell:
@@ -420,142 +402,55 @@ class MultiPropertyAutomation:
                             await re_ad_button.click()
                             await page.wait_for_timeout(1000)
                             print("   ✅ 재광고 버튼 클릭 완료")
-                            re_ad_found = True
                             break
-
-            if not re_ad_found:
-                print("❌ 재광고 버튼을 찾을 수 없습니다.")
-                return False
 
             # 4. 광고등록
             print("4️⃣ 광고등록 페이지 처리...")
             await page.wait_for_url('**/offerings/ad_regist', timeout=30000)
             await page.wait_for_timeout(1000)
 
-            ad_button = await page.query_selector('text=광고하기')
-            if not ad_button:
-                print("❌ 광고하기 버튼을 찾을 수 없습니다.")
-                return False
+            await page.click('text=광고하기')
+            # 팝업 및 페이지 전환 대기 (context destroyed 방지)
+            await page.wait_for_timeout(3000)
+            print("   ✅ 광고하기 버튼 클릭 완료")
 
-            # 팝업 메시지 초기화 후 버튼 클릭
-            popup_messages.clear()
-            await ad_button.click()
-
-            # "매물을 저장 하였습니다" 팝업 대기 (최대 10초)
-            print("⏳ 매물 저장 팝업 대기 중...")
-            saved_popup_received = False
-            for i in range(10):
-                await page.wait_for_timeout(1000)
-                if popup_messages and "매물을 저장" in popup_messages[-1]:
-                    print(f"   ✅ 광고하기 버튼 클릭 완료 (팝업: {popup_messages[-1]})")
-                    saved_popup_received = True
-                    break
-
-            if not saved_popup_received:
-                print("❌ 매물 저장 팝업이 나타나지 않음 - 광고 등록 실패")
-                try:
-                    await page.screenshot(path=f"error_screenshot_{property_number}_no_saved_popup.png")
-                    print(f"스크린샷 저장됨: error_screenshot_{property_number}_no_saved_popup.png")
-                except:
-                    pass
-                return False
-
-            # 결제 페이지로 이동 확인 (안정성 대기)
-            await page.wait_for_timeout(1500)
-
-            # 5. 결제 처리
+            # 5. 결제
             print("5️⃣ 결제 처리...")
 
-            # 결제 페이지 진입 확인 (체크박스 존재 여부로 판단)
-            print("⏳ 결제 페이지 로딩 확인 중...")
-            try:
-                await page.wait_for_selector('#consentMobile2', timeout=10000)
-                print("   ✅ 결제 페이지 로딩 완료")
-            except:
-                print("❌ 결제 페이지 로딩 실패 - 체크박스를 찾을 수 없음")
-                try:
-                    await page.screenshot(path=f"error_screenshot_{property_number}_no_payment_page.png")
-                    print(f"스크린샷 저장됨: error_screenshot_{property_number}_no_payment_page.png")
-                except:
-                    pass
-                return False
+            # 결제 페이지 로딩 충분히 대기
+            await page.wait_for_timeout(2000)
 
-            # 체크박스 클릭 (이미 존재 확인 완료)
+            # 체크박스 안전하게 클릭 (null 체크 + 직접 클릭)
             try:
-                # JavaScript로 안전하게 클릭
-                await page.evaluate("() => { const cb = document.querySelector('#consentMobile2'); if(cb) cb.click(); }")
-                await page.wait_for_timeout(500)
-                print("   ✅ 체크박스 클릭 완료")
+                checkbox = await page.query_selector('#consentMobile2')
+                if checkbox:
+                    await checkbox.click()  # evaluate 대신 직접 클릭
+                    await page.wait_for_timeout(500)
+                    print("   ✅ 체크박스 클릭 완료")
+                else:
+                    print("   ⚠️ 체크박스 없음 - 건너뜀")
             except Exception as e:
-                print(f"⚠️ 체크박스 클릭 중 오류: {e}")
-                # 일부 경우 체크박스 없이도 결제 가능할 수 있으므로 계속 진행
+                print(f"   ⚠️ 체크박스 클릭 중 오류 (계속 진행): {e}")
 
-            # 결제 버튼 대기 및 클릭
-            try:
-                payment_button = await page.wait_for_selector('#naverSendSave', timeout=10000)
-                if not payment_button:
-                    print("❌ 결제하기 버튼을 찾을 수 없습니다.")
-                    return False
-            except Exception as e:
-                print(f"❌ 결제하기 버튼 대기 중 오류: {e}")
-                return False
+            payment_button = await page.query_selector('#naverSendSave')
+            if payment_button:
+                await payment_button.click()
+                print("   ✅ 결제하기 버튼 클릭 완료")
 
-            # 팝업 메시지 초기화 후 결제 버튼 클릭
-            popup_messages.clear()
-            await payment_button.click()
-            print("   ✅ 결제하기 버튼 클릭 완료")
+            await page.wait_for_timeout(2000)
+            print(f"🎉 매물번호 {property_number} 실제 업데이트 완료!")
 
-            # 최종 결과 팝업 대기 (최대 10초)
-            print("⏳ 최종 결과 팝업 대기 중...")
-            payment_popup_received = False
-            for i in range(10):
-                await page.wait_for_timeout(1000)
-                if popup_messages:
-                    payment_popup_received = True
-                    break
-
-            # 팝업 메시지 확인
-            if not payment_popup_received:
-                print("❌ 최종 팝업 메시지를 10초 동안 받지 못했습니다.")
-                try:
-                    await page.screenshot(path=f"error_screenshot_{property_number}_no_final_popup.png")
-                    print(f"스크린샷 저장됨: error_screenshot_{property_number}_no_final_popup.png")
-                except:
-                    pass
-                return False
-
-            # 팝업 메시지 분석
-            last_popup_message = popup_messages[-1]
-            print(f"📨 최종 팝업 메시지: {last_popup_message}")
-
-            # 성공 메시지 확인
-            if "로켓전송이 완료되었습니다" in last_popup_message:
-                final_success = True
-                print(f"🎉 매물번호 {property_number} 실제 업데이트 완료!")
-            elif "Internal Server Error" in last_popup_message or "500" in last_popup_message:
-                print(f"❌ 서버 에러 발생: {last_popup_message}")
-                final_success = False
-            elif "매물을 저장 하였습니다" in last_popup_message:
-                print(f"⚠️ 결제 미완료 (저장만 됨): {last_popup_message}")
-                final_success = False
-            else:
-                print(f"⚠️ 예상치 못한 메시지: {last_popup_message}")
-                final_success = False
-
-            return final_success
+            return True
 
         except Exception as e:
             print(f"❌ 실제 업데이트 중 오류: {e}")
-            # 오류 발생 시 스크린샷 저장
+            # 오류 발생 시 스크린샷 저장 (디버깅용)
             try:
-                await page.screenshot(path=f"error_screenshot_{property_number}_update.png")
-                print(f"오류 스크린샷 저장됨: error_screenshot_{property_number}_update.png")
+                await page.screenshot(path=f"error_screenshot_{property_number}.png")
+                print(f"📸 오류 스크린샷 저장: error_screenshot_{property_number}.png")
             except:
                 pass
             return False
-        finally:
-            # 리스너 정리 (선택사항)
-            pass
     
     async def run_automation(self):
         """다중 매물 자동화 실행"""

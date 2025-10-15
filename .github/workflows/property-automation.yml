@@ -137,8 +137,8 @@ jobs:
     - name: Commit results
       if: always()
       run: |
-        # Docker 컨테이너에서 Git 리포지토리 인식
-        git config --global --add safe.directory /__w/naverland_rank_checker/naverland_rank_checker
+        # Docker 컨테이너에서 Git 리포지토리 인식 (동적 경로 사용)
+        git config --global --add safe.directory $GITHUB_WORKSPACE
         git config --global user.email "action@github.com"
         git config --global user.name "GitHub Action"
 

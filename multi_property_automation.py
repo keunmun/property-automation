@@ -420,15 +420,20 @@ class MultiPropertyAutomation:
             # 결제 페이지 로딩 충분히 대기
             await page.wait_for_timeout(2000)
 
-            # 체크박스 안전하게 클릭 (null 체크 + 직접 클릭)
+            # 체크박스 안전하게 클릭 (JavaScript로 직접 클릭 - visible 상태 무관)
             try:
-                checkbox = await page.query_selector('#consentMobile2')
-                if checkbox:
-                    await checkbox.click()  # evaluate 대신 직접 클릭
-                    await page.wait_for_timeout(500)
-                    print("   ✅ 체크박스 클릭 완료")
-                else:
-                    print("   ⚠️ 체크박스 없음 - 건너뜀")
+                await page.evaluate('''
+                    () => {
+                        const checkbox = document.querySelector('#consentMobile2');
+                        if (checkbox) {
+                            checkbox.click();
+                            return true;
+                        }
+                        return false;
+                    }
+                ''')
+                await page.wait_for_timeout(500)
+                print("   ✅ 체크박스 클릭 완료")
             except Exception as e:
                 print(f"   ⚠️ 체크박스 클릭 중 오류 (계속 진행): {e}")
 

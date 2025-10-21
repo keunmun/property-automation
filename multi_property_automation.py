@@ -42,34 +42,25 @@ class MultiPropertyAutomation:
         async with page.expect_navigation(timeout=30000, wait_until='domcontentloaded'):
             await page.click('#integrated-login > a')
 
-        # 페이지 안정화 대기
-        await page.wait_for_timeout(2000)
+        # ✅ Playwright API: 페이지 로드 상태 기반 대기
+        try:
+            await page.wait_for_load_state('domcontentloaded', timeout=5000)
+        except:
+            # 타임아웃되어도 계속 진행
+            await page.wait_for_timeout(1000)
 
         # 로그인 성공 확인 (안전한 방식)
-        try:
-            current_url = page.url
-            title = await page.title()
+        await page.wait_for_timeout(500)  # 짧은 대기로 페이지 안정화
 
-            print(f"🔗 로그인 후 URL: {current_url}")
-            print(f"📄 로그인 후 제목: {title}")
+        current_url = page.url
+        print(f"🔗 로그인 후 URL: {current_url}")
 
-            # 로그인 페이지에 아직 있는지 확인
-            is_login_page = 'login' in current_url.lower() or '로그인' in title
-            login_form_exists = await page.query_selector('#member-id')
+        # URL 기반으로 로그인 성공 확인
+        is_login_page = 'login' in current_url.lower()
 
-            if is_login_page or login_form_exists:
-                print("❌ 로그인 실패")
-                return False
-        except Exception as e:
-            print(f"⚠️ 로그인 확인 중 오류: {e}")
-            print("⏳ 추가 대기 후 재확인...")
-            await page.wait_for_timeout(3000)
-
-            # 재확인
-            current_url = page.url
-            if 'login' in current_url.lower():
-                print("❌ 로그인 실패")
-                return False
+        if is_login_page:
+            print("❌ 로그인 실패 - 여전히 로그인 페이지에 있음")
+            return False
 
         print("✅ 로그인 완료")
         # 브라우저 안정화 대기 (ERR_ABORTED 방지)
@@ -78,7 +69,7 @@ class MultiPropertyAutomation:
         print("✅ 브라우저 안정화 완료")
         return True
     
-    async def process_single_property(self, page, property_number, index, total, retry=False):
+    async def process_single_property(self, page, property_number, index, total, popup_messages=None, retry=False):
         """단일 매물 처리 (페이지네이션 포함)"""
         retry_text = " (재시도)" if retry else ""
         print(f"\n{'='*60}")
@@ -92,11 +83,42 @@ class MultiPropertyAutomation:
 
         # 팝업은 전역 리스너(handle_global_popup)가 처리하므로 별도 리스너 불필요
         
-        # 이미지 팝업 오버레이 처리 함수
+        # 이미지 팝업 오버레이 처리 함수 - Playwright API 버전
         async def handle_popup_overlay():
-            """DOM 기반 팝업 오버레이 처리"""
+            """DOM 기반 팝업 오버레이 처리 - Playwright API로 개선"""
             try:
-                # 팝업 이미지를 찾고 닫기 버튼 찾기
+                # 1. ESC 키로 팝업 닫기 시도 (가장 빠르고 안전)
+                try:
+                    await page.keyboard.press('Escape')
+                    await page.wait_for_timeout(300)
+                    print("✅ ESC 키로 팝업 닫기 시도")
+                except:
+                    pass
+
+                # 2. 닫기 버튼 찾아서 클릭
+                close_selectors = [
+                    'button[class*="close"]',
+                    'button[class*="dismiss"]',
+                    'span[class*="close"]',
+                    'div[class*="close"]',
+                    'a[class*="close"]',
+                    '.close',
+                    '.dismiss',
+                    '.x-button'
+                ]
+
+                for close_selector in close_selectors:
+                    try:
+                        close_button = await page.query_selector(close_selector)
+                        if close_button:
+                            await close_button.click()
+                            print(f"✅ {close_selector} 닫기 버튼 클릭 성공")
+                            await page.wait_for_timeout(300)
+                            return
+                    except:
+                        continue
+
+                # 3. 팝업 요소들을 Playwright API로 직접 숨김 처리
                 popup_selectors = [
                     'img[src*="popup"]',
                     'div[class*="popup"]',
@@ -104,78 +126,26 @@ class MultiPropertyAutomation:
                     '.modal',
                     '.overlay'
                 ]
-                
+
                 for selector in popup_selectors:
-                    popup_elements = await page.query_selector_all(selector)
-                    if popup_elements:
-                        print(f"🚨 {selector} 팝업 오버레이 감지 ({len(popup_elements)}개)")
-                        
-                        # 닫기 버튼 찾기 시도
-                        close_selectors = [
-                            'button[class*="close"]',
-                            'button[class*="dismiss"]',
-                            'span[class*="close"]',
-                            'div[class*="close"]',
-                            'a[class*="close"]',
-                            '.close',
-                            '.dismiss',
-                            '.x-button'
-                        ]
-                        
-                        popup_closed = False
-                        for close_selector in close_selectors:
-                            try:
-                                close_button = await page.query_selector(close_selector)
-                                if close_button:
-                                    await close_button.click()
-                                    print(f"✅ {close_selector} 닫기 버튼 클릭 성공")
-                                    popup_closed = True
-                                    break
-                            except Exception as e:
-                                continue
-                        
-                        # 닫기 버튼을 찾지 못한 경우 ESC 키 시도
-                        if not popup_closed:
-                            try:
-                                await page.keyboard.press('Escape')
-                                print("✅ ESC 키로 팝업 닫기 시도")
-                                popup_closed = True
-                            except:
-                                pass
-                        
-                        # 팝업 오버레이를 직접 숨기기 시도
-                        if not popup_closed:
-                            try:
-                                await page.evaluate('''
-                                    () => {
-                                        // 모든 팝업 오버레이 숨기기
-                                        const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
-                                        popups.forEach(popup => {
-                                            popup.style.display = 'none';
-                                            popup.style.visibility = 'hidden';
-                                            popup.remove();
-                                        });
-                                        
-                                        // z-index가 높은 요소들도 제거
-                                        const highZIndexElements = document.querySelectorAll('*');
-                                        highZIndexElements.forEach(el => {
-                                            const zIndex = window.getComputedStyle(el).zIndex;
-                                            if (zIndex && parseInt(zIndex) > 1000) {
-                                                el.style.display = 'none';
-                                                el.remove();
-                                            }
-                                        });
-                                    }
-                                ''')
-                                print("✅ JavaScript로 팝업 오버레이 제거 완료")
-                            except Exception as e:
-                                print(f"⚠️ JavaScript 팝업 제거 실패: {e}")
-                        
-                        await page.wait_for_timeout(1000)
-                        break
-                        
+                    try:
+                        popup_elements = await page.query_selector_all(selector)
+                        if popup_elements:
+                            print(f"🚨 {selector} 팝업 감지 ({len(popup_elements)}개)")
+                            for popup in popup_elements:
+                                try:
+                                    # ✅ Playwright API로 개별 요소 숨김 (evaluate 대신)
+                                    await popup.evaluate('el => el.style.display = "none"')
+                                except:
+                                    pass
+                            print(f"✅ {selector} 팝업 제거 완료")
+                    except:
+                        continue
+
+                await page.wait_for_timeout(300)
+
             except Exception as e:
-                print(f"⚠️ 팝업 오버레이 처리 중 오류: {e}")
+                print(f"⚠️ 팝업 오버레이 처리 중 오류 (계속 진행): {e}")
         
         try:
             print("🌐 매물 리스트 페이지로 이동 중...")
@@ -225,7 +195,7 @@ class MultiPropertyAutomation:
                                     await self.simulate_update(property_number)
                                     update_success = True  # 테스트 모드는 항상 성공
                                 else:
-                                    update_success = await self.execute_real_update(page, row, property_number)
+                                    update_success = await self.execute_real_update(page, row, property_number, popup_messages)
 
                                 property_found = True
                                 break
@@ -321,9 +291,13 @@ class MultiPropertyAutomation:
         print("5️⃣ 결제완료 (시뮬레이션)")
         print(f"🎉 매물번호 {property_number} 시뮬레이션 완료!")
     
-    async def execute_real_update(self, page, row, property_number):
+    async def execute_real_update(self, page, row, property_number, popup_messages=None):
         """실제 업데이트 실행"""
         print(f"\n🚀 매물번호 {property_number} 실제 업데이트:")
+
+        # 팝업 메시지 초기화 (결제 전 메시지 클리어)
+        if popup_messages is not None:
+            popup_messages.clear()
 
         try:
             # 1. 노출종료
@@ -333,34 +307,41 @@ class MultiPropertyAutomation:
                 print("❌ 노출종료 버튼을 찾을 수 없습니다.")
                 return False
 
-            # 팝업 오버레이 처리 함수 (공통 사용)
+            # 팝업 오버레이 처리 함수 - Playwright API 버전
             async def handle_popup_overlay():
-                """DOM 기반 팝업 오버레이 처리"""
+                """DOM 기반 팝업 오버레이 처리 - Playwright API로 개선"""
                 try:
-                    await page.evaluate('''
-                        () => {
-                            // 모든 팝업 오버레이 숨기기
-                            const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
-                            popups.forEach(popup => {
-                                popup.style.display = 'none';
-                                popup.style.visibility = 'hidden';
-                                popup.remove();
-                            });
+                    # 1. ESC 키로 팝업 닫기 (가장 빠름)
+                    try:
+                        await page.keyboard.press('Escape')
+                        await page.wait_for_timeout(300)
+                    except:
+                        pass
 
-                            // z-index가 높은 요소들도 제거
-                            const highZIndexElements = document.querySelectorAll('*');
-                            highZIndexElements.forEach(el => {
-                                const zIndex = window.getComputedStyle(el).zIndex;
-                                if (zIndex && parseInt(zIndex) > 1000) {
-                                    el.style.display = 'none';
-                                    el.remove();
-                                }
-                            });
-                        }
-                    ''')
-                    print("✅ JavaScript로 팝업 오버레이 제거 완료")
+                    # 2. 팝업 요소들을 Playwright API로 숨김
+                    popup_selectors = [
+                        'img[src*="popup"]',
+                        'div[class*="popup"]',
+                        'div[id*="popup"]',
+                        '.modal',
+                        '.overlay'
+                    ]
+
+                    for selector in popup_selectors:
+                        try:
+                            popup_elements = await page.query_selector_all(selector)
+                            for popup in popup_elements:
+                                try:
+                                    # ✅ Playwright API로 개별 요소 숨김
+                                    await popup.evaluate('el => el.style.display = "none"')
+                                except:
+                                    pass
+                        except:
+                            continue
+
+                    print("✅ 팝업 오버레이 제거 완료")
                 except Exception as e:
-                    print(f"⚠️ JavaScript 팝업 제거 실패: {e}")
+                    print(f"⚠️ 팝업 제거 실패 (계속 진행): {e}")
 
             try:
                 # 노출종료 버튼 클릭
@@ -407,44 +388,109 @@ class MultiPropertyAutomation:
             # 4. 광고등록
             print("4️⃣ 광고등록 페이지 처리...")
             await page.wait_for_url('**/offerings/ad_regist', timeout=30000)
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
 
             await page.click('text=광고하기')
-            # 팝업 및 페이지 전환 대기 (context destroyed 방지)
-            await page.wait_for_timeout(3000)
-            print("   ✅ 광고하기 버튼 클릭 완료")
+
+            # ✅ Playwright API: 페이지 로드 상태 기반 대기 (시간 대신 조건 기반)
+            try:
+                await page.wait_for_load_state('domcontentloaded', timeout=10000)
+                print("   ✅ 광고하기 버튼 클릭 완료 - 페이지 로딩 완료")
+            except:
+                # 타임아웃되어도 계속 진행 (일부 사이트는 완전 로드 안될 수 있음)
+                print("   ⚠️ 페이지 로딩 타임아웃 - 계속 진행")
+                await page.wait_for_timeout(1000)
 
             # 5. 결제
             print("5️⃣ 결제 처리...")
 
-            # 결제 페이지 로딩 충분히 대기
-            await page.wait_for_timeout(2000)
+            # ✅ 체크박스 클릭 (evaluate 방식 - viewport/visibility 무관)
+            checkbox_checked = False
+            for attempt in range(3):  # 최대 3회 시도
+                try:
+                    # 체크박스 존재 확인
+                    await page.wait_for_selector('#consentMobile2', state='attached', timeout=10000)
 
-            # 체크박스 안전하게 클릭 (JavaScript로 직접 클릭 - visible 상태 무관)
-            try:
-                await page.evaluate('''
-                    () => {
-                        const checkbox = document.querySelector('#consentMobile2');
-                        if (checkbox) {
-                            checkbox.click();
-                            return true;
+                    # ✅ JavaScript로 직접 클릭 (이전 안정 버전 방식)
+                    result = await page.evaluate('''
+                        () => {
+                            const checkbox = document.querySelector('#consentMobile2');
+                            if (checkbox) {
+                                checkbox.click();
+                                // 클릭 후 실제로 체크되었는지 확인
+                                return checkbox.checked;
+                            }
+                            return false;
                         }
-                        return false;
-                    }
-                ''')
-                await page.wait_for_timeout(500)
-                print("   ✅ 체크박스 클릭 완료")
-            except Exception as e:
-                print(f"   ⚠️ 체크박스 클릭 중 오류 (계속 진행): {e}")
+                    ''')
 
+                    await page.wait_for_timeout(500)
+
+                    if result:
+                        print(f"   ✅ 체크박스 클릭 완료 (시도 {attempt + 1})")
+                        checkbox_checked = True
+                        break
+                    else:
+                        print(f"   ⚠️ 체크박스 클릭했지만 체크 안됨 (시도 {attempt + 1})")
+                        if attempt < 2:
+                            await page.wait_for_timeout(500)
+                            continue
+
+                except Exception as e:
+                    print(f"   ⚠️ 체크박스 클릭 시도 {attempt + 1} 실패: {e}")
+                    if attempt < 2:
+                        await page.wait_for_timeout(500)
+                        continue
+
+            # 체크박스가 체크되지 않으면 실패 처리
+            if not checkbox_checked:
+                print(f"   ❌ 체크박스 클릭 실패 - 매물번호 {property_number} 업데이트 실패")
+                return False
+
+            # 체크박스 체크 후에만 결제하기 버튼 클릭
             payment_button = await page.query_selector('#naverSendSave')
-            if payment_button:
-                await payment_button.click()
-                print("   ✅ 결제하기 버튼 클릭 완료")
+            if not payment_button:
+                print("   ❌ 결제하기 버튼을 찾을 수 없음")
+                return False
 
-            await page.wait_for_timeout(2000)
+            await payment_button.click()
+            print("   ✅ 결제하기 버튼 클릭 완료")
+
+            # ✅ "로켓전송이 완료되었습니다" alert 대기 (최대 20초)
+            print("   ⏳ 결제 완료 대기 중...")
+            payment_success = False
+            wait_time = 0
+            max_wait = 20  # 최대 20초 대기
+
+            while wait_time < max_wait:
+                await page.wait_for_timeout(1000)
+                wait_time += 1
+
+                # 팝업 메시지 확인
+                if popup_messages is not None:
+                    for msg in popup_messages:
+                        if "로켓전송이 완료되었습니다" in msg:
+                            print(f"   ✅ 결제 성공 확인: {msg}")
+                            payment_success = True
+                            break
+
+                if payment_success:
+                    break
+
+                # "동의해 주세요" 메시지가 나오면 실패
+                if popup_messages is not None:
+                    for msg in popup_messages:
+                        if "동의해 주세요" in msg or "동의" in msg:
+                            print(f"   ❌ 체크박스 미동의로 결제 실패: {msg}")
+                            return False
+
+            # 성공 메시지 확인
+            if not payment_success:
+                print(f"   ❌ 결제 완료 확인 실패 - '로켓전송이 완료되었습니다' alert를 받지 못함")
+                print(f"   📋 받은 팝업 메시지: {popup_messages if popup_messages else '없음'}")
+                return False
+
             print(f"🎉 매물번호 {property_number} 실제 업데이트 완료!")
-
             return True
 
         except Exception as e:
@@ -492,10 +538,18 @@ class MultiPropertyAutomation:
                 )
                 
                 page = await context.new_page()
-                
+
+                # 팝업 메시지 저장용 변수
+                last_popup_messages = []
+
                 # 전역 팝업 처리 함수
                 async def handle_global_popup(dialog):
-                    print(f"전역 팝업 감지: {dialog.type} - {dialog.message}")
+                    message = dialog.message
+                    print(f"전역 팝업 감지: {dialog.type} - {message}")
+
+                    # 메시지 저장
+                    last_popup_messages.append(message)
+
                     try:
                         if dialog.type == 'alert':
                             await dialog.accept()
@@ -524,8 +578,8 @@ class MultiPropertyAutomation:
                 retry_failed = []  # 전역 변수로 선언
 
                 for i, property_number in enumerate(self.property_numbers, 1):
-                    success = await self.process_single_property(page, property_number, i, len(self.property_numbers))
-                    
+                    success = await self.process_single_property(page, property_number, i, len(self.property_numbers), last_popup_messages)
+
                     if success:
                         success_count += 1
                     else:
@@ -544,7 +598,7 @@ class MultiPropertyAutomation:
                     # retry_failed 이미 전역 변수로 선언됨
                     for i, property_number in enumerate(failed_properties, 1):
                         print(f"\n[재시도 {i}/{len(failed_properties)}] 매물번호 {property_number}")
-                        success = await self.process_single_property(page, property_number, i, len(failed_properties), retry=True)
+                        success = await self.process_single_property(page, property_number, i, len(failed_properties), last_popup_messages, retry=True)
                         
                         if success:
                             success_count += 1

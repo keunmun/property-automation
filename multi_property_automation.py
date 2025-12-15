@@ -69,13 +69,17 @@ class MultiPropertyAutomation:
         print("✅ 브라우저 안정화 완료")
         return True
     
-    async def process_single_property(self, page, property_number, index, total, popup_messages=None, retry=False):
-        """단일 매물 처리 (페이지네이션 포함)"""
+    async def process_single_property(self, page, property_number, index, total, popup_messages=None, retry=False, search_in_ended=False):
+        """단일 매물 처리 (페이지네이션 포함)
+
+        Args:
+            search_in_ended: True이면 종료매물에서 검색, False이면 일반 매물 리스트에서 검색
+        """
         retry_text = " (재시도)" if retry else ""
         print(f"\n{'='*60}")
         print(f"[{index}/{total}] 매물번호 {property_number} 처리 시작{retry_text}")
         print(f"{'='*60}")
-        
+
         # 재시도인 경우 추가 대기
         if retry:
             print("🔄 재시도 모드: 안정성을 위해 추가 대기...")
@@ -151,16 +155,78 @@ class MultiPropertyAutomation:
             print("🌐 매물 리스트 페이지로 이동 중...")
             await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
 
-            # 페이지 로드 후 안정화 대기
-            await page.wait_for_timeout(2000)
-
+            # 🎯 스마트 대기: 매물 테이블이 로딩될 때까지 대기
             print("📋 매물 테이블 로딩 대기 중...")
             try:
-                await page.wait_for_selector('table tbody tr', timeout=30000)
+                await page.wait_for_selector('table tbody tr', state='visible', timeout=30000)
+                print("✅ 매물 테이블 로딩 완료")
             except Exception as e:
                 print(f"⚠️ 테이블 로딩 지연 - 재시도 중...")
                 await page.wait_for_timeout(2000)
-                await page.wait_for_selector('table tbody tr', timeout=30000)
+                await page.wait_for_selector('table tbody tr', state='visible', timeout=30000)
+
+            # 매물 리스트 로딩 후 팝업 제거
+            await page.evaluate('''
+                () => {
+                    // 모든 팝업 오버레이 숨기기
+                    const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
+                    popups.forEach(popup => {
+                        popup.style.display = 'none';
+                        popup.style.visibility = 'hidden';
+                        popup.remove();
+                    });
+
+                    // z-index가 높은 요소들도 제거
+                    const highZIndexElements = document.querySelectorAll('*');
+                    highZIndexElements.forEach(el => {
+                        const zIndex = window.getComputedStyle(el).zIndex;
+                        if (zIndex && parseInt(zIndex) > 1000) {
+                            el.style.display = 'none';
+                            el.remove();
+                        }
+                    });
+                }
+            ''')
+            print("✅ 매물 리스트 로딩 후 팝업 오버레이 제거 완료")
+
+            # 재시도이고 종료매물에서 검색해야 하는 경우
+            if search_in_ended:
+                print("🔄 종료매물 테이블에서 검색 중...")
+                try:
+                    # 광고종료 버튼 바로 클릭
+                    ad_end_button = await page.wait_for_selector('#wrap > div.container > div > div > div.sectionWrap > div.statusWrap.ver3 > div.statusItem.statusAdEnd.GTM_offerings_ad_list_end_ad', timeout=10000)
+                    await ad_end_button.click()
+                    print("✅ 광고종료 버튼 클릭 완료")
+
+                    # 🎯 스마트 대기: 종료매물 테이블이 로딩될 때까지 대기
+                    print("⏳ 종료매물 목록 로딩 대기 중...")
+                    await page.wait_for_selector('table tbody tr', state='visible', timeout=10000)
+                    print("✅ 종료매물 목록 로딩 완료")
+
+                    # 종료매물 목록 로딩 후 팝업 제거
+                    await page.evaluate('''
+                        () => {
+                            const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
+                            popups.forEach(popup => {
+                                popup.style.display = 'none';
+                                popup.style.visibility = 'hidden';
+                                popup.remove();
+                            });
+
+                            const highZIndexElements = document.querySelectorAll('*');
+                            highZIndexElements.forEach(el => {
+                                const zIndex = window.getComputedStyle(el).zIndex;
+                                if (zIndex && parseInt(zIndex) > 1000) {
+                                    el.style.display = 'none';
+                                    el.remove();
+                                }
+                            });
+                        }
+                    ''')
+                    print("✅ 종료매물 목록 로딩 후 팝업 오버레이 제거 완료")
+                except Exception as e:
+                    print(f"❌ 종료매물 테이블 이동 실패: {e}")
+                    return False
             
             # 매물 검색 (페이지네이션 포함)
             property_found = False
@@ -187,6 +253,20 @@ class MultiPropertyAutomation:
                             if property_number in number_text.strip():
                                 print(f"🎯 매물번호 {property_number} 발견! ({current_page}페이지, 행 {i})")
 
+                                # 광고유형 확인 (8번째 컬럼)
+                                ad_type_cell = await row.query_selector('td:nth-child(8)')
+                                if ad_type_cell:
+                                    ad_type_text = await ad_type_cell.inner_text()
+                                    print(f"광고유형 확인: {ad_type_text.strip()}")
+
+                                    if "로켓등록" not in ad_type_text:
+                                        print(f"❌ 로켓등록 상품이 아닙니다. (광고유형: {ad_type_text.strip()})")
+                                        return False  # 재시도 불필요
+
+                                    print(f"✅ 로켓등록 상품 확인됨")
+                                else:
+                                    print(f"⚠️ 광고유형 컬럼을 찾을 수 없습니다.")
+
                                 # 매물 정보 출력
                                 await self.print_property_info(row, property_number)
 
@@ -195,7 +275,12 @@ class MultiPropertyAutomation:
                                     await self.simulate_update(property_number)
                                     update_success = True  # 테스트 모드는 항상 성공
                                 else:
-                                    update_success = await self.execute_real_update(page, row, property_number, popup_messages)
+                                    # 종료매물에서 검색한 경우: 재광고 버튼만 클릭하고 광고등록 페이지로 이동
+                                    if search_in_ended:
+                                        update_success = await self.execute_re_register_from_ended(page, row, property_number, popup_messages)
+                                    else:
+                                        # 일반 매물 리스트: 노출종료부터 전체 프로세스
+                                        update_success = await self.execute_real_update(page, row, property_number, popup_messages)
 
                                 property_found = True
                                 break
@@ -291,6 +376,138 @@ class MultiPropertyAutomation:
         print("5️⃣ 결제완료 (시뮬레이션)")
         print(f"🎉 매물번호 {property_number} 시뮬레이션 완료!")
     
+    async def execute_re_register_from_ended(self, page, row, property_number, popup_messages=None):
+        """종료매물에서 재광고 실행 (재시도 전용)
+
+        Note: 이 메서드는 process_single_property()에서 이미 광고유형을 확인한 후 호출되므로
+              여기서는 광고유형 재확인이 불필요함
+        """
+        print(f"\n🔄 [재시도] 매물번호 {property_number} 재광고 실행:")
+
+        # 팝업 메시지 초기화
+        if popup_messages is not None:
+            popup_messages.clear()
+
+        try:
+            # 재광고 버튼 클릭
+            print("1️⃣ 재광고 버튼 클릭...")
+            re_ad_button = await row.query_selector('#reReg')
+            if not re_ad_button:
+                print("   ❌ 재광고 버튼을 찾을 수 없습니다.")
+                return False
+
+            await re_ad_button.click()
+            await page.wait_for_timeout(1000)
+            print("   ✅ 재광고 버튼 클릭 완료")
+
+            # 2. 광고등록 페이지 처리
+            print("2️⃣ 광고등록 페이지 처리...")
+            await page.wait_for_url('**/offerings/ad_regist', timeout=30000)
+            await page.wait_for_timeout(500)
+
+            await page.click('text=광고하기')
+
+            try:
+                await page.wait_for_load_state('domcontentloaded', timeout=10000)
+                print("   ✅ 광고하기 버튼 클릭 완료 - 페이지 로딩 완료")
+            except:
+                print("   ⚠️ 페이지 로딩 타임아웃 - 계속 진행")
+                await page.wait_for_timeout(1000)
+
+            # 3. 결제 처리
+            print("3️⃣ 결제 처리...")
+
+            # 체크박스 클릭
+            checkbox_checked = False
+            for attempt in range(3):
+                try:
+                    await page.wait_for_selector('#consentMobile2', state='attached', timeout=10000)
+
+                    result = await page.evaluate('''
+                        () => {
+                            const checkbox = document.querySelector('#consentMobile2');
+                            if (checkbox) {
+                                checkbox.click();
+                                return checkbox.checked;
+                            }
+                            return false;
+                        }
+                    ''')
+
+                    await page.wait_for_timeout(500)
+
+                    if result:
+                        print(f"   ✅ 체크박스 클릭 완료 (시도 {attempt + 1})")
+                        checkbox_checked = True
+                        break
+                    else:
+                        print(f"   ⚠️ 체크박스 클릭했지만 체크 안됨 (시도 {attempt + 1})")
+                        if attempt < 2:
+                            await page.wait_for_timeout(500)
+                            continue
+
+                except Exception as e:
+                    print(f"   ⚠️ 체크박스 클릭 시도 {attempt + 1} 실패: {e}")
+                    if attempt < 2:
+                        await page.wait_for_timeout(500)
+                        continue
+
+            if not checkbox_checked:
+                print(f"   ❌ 체크박스 클릭 실패 - 매물번호 {property_number} 재시도 실패")
+                return False
+
+            # 결제하기 버튼 클릭
+            payment_button = await page.query_selector('#naverSendSave')
+            if not payment_button:
+                print("   ❌ 결제하기 버튼을 찾을 수 없음")
+                return False
+
+            await payment_button.click()
+            print("   ✅ 결제하기 버튼 클릭 완료")
+
+            # 결제 완료 확인
+            print("   ⏳ 결제 완료 대기 중...")
+            payment_success = False
+            wait_time = 0
+            max_wait = 20
+
+            while wait_time < max_wait:
+                await page.wait_for_timeout(1000)
+                wait_time += 1
+
+                if popup_messages is not None:
+                    for msg in popup_messages:
+                        if "로켓전송이 완료되었습니다" in msg:
+                            print(f"   ✅ 결제 성공 확인: {msg}")
+                            payment_success = True
+                            break
+
+                if payment_success:
+                    break
+
+                if popup_messages is not None:
+                    for msg in popup_messages:
+                        if "동의해 주세요" in msg or "동의" in msg:
+                            print(f"   ❌ 체크박스 미동의로 결제 실패: {msg}")
+                            return False
+
+            if not payment_success:
+                print(f"   ❌ 결제 완료 확인 실패 - '로켓전송이 완료되었습니다' alert를 받지 못함")
+                print(f"   📋 받은 팝업 메시지: {popup_messages if popup_messages else '없음'}")
+                return False
+
+            print(f"🎉 [재시도] 매물번호 {property_number} 재광고 완료!")
+            return True
+
+        except Exception as e:
+            print(f"❌ [재시도] 재광고 중 오류: {e}")
+            try:
+                await page.screenshot(path=f"retry_error_screenshot_{property_number}.png")
+                print(f"📸 재시도 오류 스크린샷 저장: retry_error_screenshot_{property_number}.png")
+            except:
+                pass
+            return False
+
     async def execute_real_update(self, page, row, property_number, popup_messages=None):
         """실제 업데이트 실행"""
         print(f"\n🚀 매물번호 {property_number} 실제 업데이트:")
@@ -344,15 +561,19 @@ class MultiPropertyAutomation:
                     print(f"⚠️ 팝업 제거 실패 (계속 진행): {e}")
 
             try:
-                # 노출종료 버튼 클릭
+                # 노출종료 버튼 클릭 (전역 팝업 리스너가 처리함)
                 print("🖱️ 노출종료 버튼을 클릭합니다...")
-                await end_button.click(force=True)  # force 옵션 추가
+                await end_button.click()
                 print("✅ 노출종료 버튼 클릭 완료")
 
-                # 팝업 처리 대기 (전역 리스너가 처리)
+                # 팝업 처리를 위한 최소 대기
                 print("⏳ 팝업 처리 대기 중...")
-                await page.wait_for_timeout(2000)
-                print("   ✅ 노출종료 완료")
+                await page.wait_for_timeout(1000)
+
+                # 🎯 스마트 대기: 광고종료 버튼이 활성화될 때까지 대기
+                print("⏳ 광고종료 버튼 활성화 대기 중...")
+                await page.wait_for_selector('.statusAdEnd', state='visible', timeout=10000)
+                print("✅ 노출종료 완료 (광고종료 버튼 활성화됨)")
 
             except Exception as e:
                 print(f"노출종료 버튼 클릭 중 오류: {e}")
@@ -366,24 +587,60 @@ class MultiPropertyAutomation:
 
             ad_end_button = await page.wait_for_selector('.statusAdEnd', timeout=10000)
             await ad_end_button.click()
-            await page.wait_for_timeout(1000)
-            print("   ✅ 종료매물 목록 표시")
+
+            # 🎯 스마트 대기: 종료매물 테이블이 로딩될 때까지 대기
+            print("⏳ 종료매물 목록 로딩 대기 중...")
+            await page.wait_for_selector('table tbody tr', state='visible', timeout=10000)
+            print("✅ 종료매물 목록 로딩 완료")
+
+            # 종료매물 목록 로딩 후 팝업 제거
+            await page.evaluate('''
+                () => {
+                    // 모든 팝업 오버레이 숨기기
+                    const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
+                    popups.forEach(popup => {
+                        popup.style.display = 'none';
+                        popup.style.visibility = 'hidden';
+                        popup.remove();
+                    });
+
+                    // z-index가 높은 요소들도 제거
+                    const highZIndexElements = document.querySelectorAll('*');
+                    highZIndexElements.forEach(el => {
+                        const zIndex = window.getComputedStyle(el).zIndex;
+                        if (zIndex && parseInt(zIndex) > 1000) {
+                            el.style.display = 'none';
+                            el.remove();
+                        }
+                    });
+                }
+            ''')
+            print("✅ 종료매물 목록 로딩 후 팝업 오버레이 제거 완료")
 
             # 3. 재광고
             print("3️⃣ 종료매물에서 재광고 버튼 검색...")
             end_rows = await page.query_selector_all('table tbody tr')
 
+            found_in_ended = False
             for row in end_rows:
                 number_cell = await row.query_selector('td:nth-child(3) > div.numberN')
                 if number_cell:
                     number_text = await number_cell.inner_text()
                     if property_number in number_text.strip():
+                        print(f"   종료매물에서 매물번호 {property_number} 발견!")
+                        # Note: process_single_property()에서 이미 로켓등록 확인 후 노출종료했으므로 재확인 불필요
+
                         re_ad_button = await row.query_selector('#reReg')
                         if re_ad_button:
                             await re_ad_button.click()
                             await page.wait_for_timeout(1000)
                             print("   ✅ 재광고 버튼 클릭 완료")
+                            found_in_ended = True
                             break
+
+            if not found_in_ended:
+                print(f"   ❌ 종료매물에서 매물번호 {property_number}를 찾을 수 없습니다.")
+                return False
 
             # 4. 광고등록
             print("4️⃣ 광고등록 페이지 처리...")
@@ -594,19 +851,20 @@ class MultiPropertyAutomation:
                 if failed_properties:
                     print(f"\n🔄 실패한 {len(failed_properties)}개 매물 재시도 중...")
                     print("="*60)
-                    
+
                     # retry_failed 이미 전역 변수로 선언됨
                     for i, property_number in enumerate(failed_properties, 1):
                         print(f"\n[재시도 {i}/{len(failed_properties)}] 매물번호 {property_number}")
-                        success = await self.process_single_property(page, property_number, i, len(failed_properties), last_popup_messages, retry=True)
-                        
+                        # 종료매물에서 검색하도록 search_in_ended=True 전달
+                        success = await self.process_single_property(page, property_number, i, len(failed_properties), last_popup_messages, retry=True, search_in_ended=True)
+
                         if success:
                             success_count += 1
                             print(f"✅ 재시도 성공: {property_number}")
                         else:
                             retry_failed.append(property_number)
                             print(f"❌ 재시도 실패: {property_number}")
-                        
+
                         # 재시도 간 대기
                         if i < len(failed_properties):
                             await page.wait_for_timeout(1000)

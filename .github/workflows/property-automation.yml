@@ -215,7 +215,8 @@ jobs:
         echo "- 전체: ${{ steps.automation_run.outputs.total_count }}개"
         echo "- 성공: ${{ steps.automation_run.outputs.success_count }}개"
 
-        if [ "${{ steps.automation_run.outputs.has_failures }}" == "true" ]; then
+        # 실패 감지: 1개라도 실패하면 has_failures=true로 설정
+        if [ "${{ steps.automation_run.outputs.has_failures }}" == "true" ] || [ "${{ steps.automation_run.outputs.success_count }}" != "${{ steps.automation_run.outputs.total_count }}" ]; then
           echo ""
           echo "::error::❌ 매물 자동화 실패 발생!"
           echo "::error::실패한 매물 번호: ${{ steps.automation_run.outputs.failed_properties }}"
@@ -231,6 +232,52 @@ jobs:
         else
           echo "✅ 모든 매물 처리 성공!"
         fi
+
+    - name: Send failure email notification
+      if: failure() || (always() && (steps.automation_run.outputs.has_failures == 'true' || steps.automation_run.outputs.success_count != steps.automation_run.outputs.total_count))
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_APP_PASSWORD }}
+        subject: "❌ 네이버부동산 자동화 실패 알림 - ${{ steps.automation_run.outputs.success_count }}/${{ steps.automation_run.outputs.total_count }}개 성공"
+        to: ${{ secrets.NOTIFICATION_EMAIL }}
+        from: ${{ secrets.EMAIL_USERNAME }}
+        body: |
+          🚨 네이버부동산 매물 자동화 실패 보고
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          📊 실행 결과
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          • 전체 매물: ${{ steps.automation_run.outputs.total_count }}개
+          • ✅ 성공: ${{ steps.automation_run.outputs.success_count }}개
+          • ❌ 실패: ${{ steps.automation_run.outputs.total_count - steps.automation_run.outputs.success_count }}개
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          ❌ 실패한 매물 번호
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          ${{ steps.automation_run.outputs.failed_properties }}
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          📋 가능한 실패 원인
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          • 매물을 찾을 수 없음 (삭제 또는 이미 처리됨)
+          • 로켓등록 상품이 아님
+          • 노출종료 버튼 클릭 실패
+          • 체크박스 클릭 실패
+          • 결제 처리 실패
+          • 네트워크 오류 또는 타임아웃
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          🔍 상세 로그 확인
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          실행 시간: ${{ github.event.repository.updated_at }}
+          트리거: ${{ github.event_name }}
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   no-schedule:
     needs: check-schedule

@@ -215,6 +215,12 @@ jobs:
         echo "- 전체: ${{ steps.automation_run.outputs.total_count }}개"
         echo "- 성공: ${{ steps.automation_run.outputs.success_count }}개"
 
+        # 실패 개수 계산
+        total=${{ steps.automation_run.outputs.total_count }}
+        success=${{ steps.automation_run.outputs.success_count }}
+        failed=$((total - success))
+        echo "- 실패: ${failed}개"
+
         # 실패 감지: 1개라도 실패하면 has_failures=true로 설정
         if [ "${{ steps.automation_run.outputs.has_failures }}" == "true" ] || [ "${{ steps.automation_run.outputs.success_count }}" != "${{ steps.automation_run.outputs.total_count }}" ]; then
           echo ""
@@ -233,51 +239,20 @@ jobs:
           echo "✅ 모든 매물 처리 성공!"
         fi
 
-    - name: Send failure email notification
-      if: failure() || (always() && (steps.automation_run.outputs.has_failures == 'true' || steps.automation_run.outputs.success_count != steps.automation_run.outputs.total_count))
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_APP_PASSWORD }}
-        subject: "❌ 네이버부동산 자동화 실패 알림 - ${{ steps.automation_run.outputs.success_count }}/${{ steps.automation_run.outputs.total_count }}개 성공"
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: ${{ secrets.EMAIL_USERNAME }}
-        body: |
-          🚨 네이버부동산 매물 자동화 실패 보고
+    - name: Calculate failure count
+      id: calc_failures
+      if: always()
+      run: |
+        total=${{ steps.automation_run.outputs.total_count }}
+        success=${{ steps.automation_run.outputs.success_count }}
 
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          📊 실행 결과
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          • 전체 매물: ${{ steps.automation_run.outputs.total_count }}개
-          • ✅ 성공: ${{ steps.automation_run.outputs.success_count }}개
-          • ❌ 실패: ${{ steps.automation_run.outputs.total_count - steps.automation_run.outputs.success_count }}개
+        # 빈 값 처리
+        if [ -z "$total" ]; then total=0; fi
+        if [ -z "$success" ]; then success=0; fi
 
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          ❌ 실패한 매물 번호
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          ${{ steps.automation_run.outputs.failed_properties }}
-
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          📋 가능한 실패 원인
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          • 매물을 찾을 수 없음 (삭제 또는 이미 처리됨)
-          • 로켓등록 상품이 아님
-          • 노출종료 버튼 클릭 실패
-          • 체크박스 클릭 실패
-          • 결제 처리 실패
-          • 네트워크 오류 또는 타임아웃
-
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          🔍 상세 로그 확인
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          실행 시간: ${{ github.event.repository.updated_at }}
-          트리거: ${{ github.event_name }}
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        failed=$((total - success))
+        echo "failed_count=${failed}" >> $GITHUB_OUTPUT
+        echo "실패 개수: ${failed}개"
 
   no-schedule:
     needs: check-schedule
@@ -305,6 +280,7 @@ jobs:
 
     steps:
     - name: Check workflow status
+      id: workflow_status
       run: |
         echo "📊 최종 상태 확인"
 
@@ -320,12 +296,53 @@ jobs:
           echo "  - 네트워크 타임아웃"
           echo ""
           echo "🔍 상세 로그: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "has_system_error=true" >> $GITHUB_OUTPUT
           exit 1
         elif [ "${{ needs.automation.result }}" == "cancelled" ]; then
           echo "::error::⚠️ 자동화 실행이 취소되었습니다."
+          echo "has_system_error=true" >> $GITHUB_OUTPUT
           exit 1
         elif [ "${{ needs.automation.result }}" == "skipped" ]; then
           echo "::warning::⏭️ 자동화 실행이 건너뛰어졌습니다."
         else
           echo "✅ 자동화 정상 완료"
         fi
+
+    - name: Send system error email notification
+      if: failure() && steps.workflow_status.outputs.has_system_error == 'true'
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_APP_PASSWORD }}
+        subject: "🚨 네이버부동산 자동화 시스템 오류 발생!"
+        to: ${{ secrets.NOTIFICATION_EMAIL }}
+        from: ${{ secrets.EMAIL_USERNAME }}
+        body: |
+          🚨 네이버부동산 자동화 시스템 오류
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          ⚠️ 오류 유형
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          자동화 Job 실행 실패: ${{ needs.automation.result }}
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          📋 가능한 시스템 오류 원인
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          • Docker 컨테이너 시작 실패
+          • Playwright 이미지 다운로드 오류
+          • Python 패키지 설치 오류
+          • 네트워크 연결 타임아웃
+          • GitHub Actions 시스템 장애
+          • Python 스크립트 크래시
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          🔍 상세 로그 확인 (필수)
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          실행 시간: ${{ github.event.repository.updated_at }}
+          트리거: ${{ github.event_name }}
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

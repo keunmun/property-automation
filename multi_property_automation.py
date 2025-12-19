@@ -391,6 +391,28 @@ class MultiPropertyAutomation:
         try:
             # 재광고 버튼 클릭
             print("1️⃣ 재광고 버튼 클릭...")
+
+            # 재광고 버튼 클릭 직전 팝업 제거 (종료매물 목록 로딩 후 시간 경과로 재생성된 팝업 제거)
+            await page.evaluate('''
+                () => {
+                    const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
+                    popups.forEach(popup => {
+                        popup.style.display = 'none';
+                        popup.style.visibility = 'hidden';
+                        popup.remove();
+                    });
+                    const highZIndexElements = document.querySelectorAll('*');
+                    highZIndexElements.forEach(el => {
+                        const zIndex = window.getComputedStyle(el).zIndex;
+                        if (zIndex && parseInt(zIndex) > 1000) {
+                            el.style.display = 'none';
+                            el.remove();
+                        }
+                    });
+                }
+            ''')
+            print("   ✅ [재시도] 재광고 버튼 클릭 전 팝업 제거 완료")
+
             re_ad_button = await row.query_selector('#reReg')
             if not re_ad_button:
                 print("   ❌ 재광고 버튼을 찾을 수 없습니다.")
@@ -582,8 +604,29 @@ class MultiPropertyAutomation:
             # 2. 광고종료
             print("2️⃣ 광고종료 버튼 클릭...")
 
-            # 팝업 오버레이 제거 (광고종료 버튼 클릭 전)
-            await handle_popup_overlay()
+            # 팝업 오버레이 제거 (광고종료 버튼 클릭 전) - 강력한 방식으로 수정
+            await page.evaluate('''
+                () => {
+                    // 모든 팝업 오버레이 숨기기
+                    const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
+                    popups.forEach(popup => {
+                        popup.style.display = 'none';
+                        popup.style.visibility = 'hidden';
+                        popup.remove();
+                    });
+
+                    // z-index가 높은 요소들도 제거
+                    const highZIndexElements = document.querySelectorAll('*');
+                    highZIndexElements.forEach(el => {
+                        const zIndex = window.getComputedStyle(el).zIndex;
+                        if (zIndex && parseInt(zIndex) > 1000) {
+                            el.style.display = 'none';
+                            el.remove();
+                        }
+                    });
+                }
+            ''')
+            print("✅ 광고종료 버튼 클릭 전 팝업 오버레이 제거 완료")
 
             ad_end_button = await page.wait_for_selector('.statusAdEnd', timeout=10000)
             await ad_end_button.click()
@@ -629,6 +672,27 @@ class MultiPropertyAutomation:
                     if property_number in number_text.strip():
                         print(f"   종료매물에서 매물번호 {property_number} 발견!")
                         # Note: process_single_property()에서 이미 로켓등록 확인 후 노출종료했으므로 재확인 불필요
+
+                        # 재광고 버튼 클릭 직전 팝업 제거 (시간 경과로 재생성된 팝업 제거)
+                        await page.evaluate('''
+                            () => {
+                                const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
+                                popups.forEach(popup => {
+                                    popup.style.display = 'none';
+                                    popup.style.visibility = 'hidden';
+                                    popup.remove();
+                                });
+                                const highZIndexElements = document.querySelectorAll('*');
+                                highZIndexElements.forEach(el => {
+                                    const zIndex = window.getComputedStyle(el).zIndex;
+                                    if (zIndex && parseInt(zIndex) > 1000) {
+                                        el.style.display = 'none';
+                                        el.remove();
+                                    }
+                                });
+                            }
+                        ''')
+                        print("   ✅ 재광고 버튼 클릭 전 팝업 제거 완료")
 
                         re_ad_button = await row.query_selector('#reReg')
                         if re_ad_button:

@@ -318,28 +318,29 @@ jobs:
             repo: context.repo.repo,
             title: '🚨 자동화 시스템 오류 - ' + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
             labels: ['automation-error', 'system-error'],
-            body: `## 🚨 네이버부동산 자동화 시스템 오류
+            body: |
+              ## 🚨 네이버부동산 자동화 시스템 오류
 
-### ⚠️ 오류 유형
-- **자동화 Job 실행 실패:** \`${{ needs.automation.result }}\`
+              ### ⚠️ 오류 유형
+              - **자동화 Job 실행 실패:** `${{ needs.automation.result }}`
 
-### 📋 가능한 시스템 오류 원인
-- Docker 컨테이너 시작 실패
-- Playwright 이미지 다운로드 오류
-- Python 패키지 설치 오류
-- 네트워크 연결 타임아웃
-- GitHub Actions 시스템 장애
-- Python 스크립트 크래시
+              ### 📋 가능한 시스템 오류 원인
+              - Docker 컨테이너 시작 실패
+              - Playwright 이미지 다운로드 오류
+              - Python 패키지 설치 오류
+              - 네트워크 연결 타임아웃
+              - GitHub Actions 시스템 장애
+              - Python 스크립트 크래시
 
-### 🔍 상세 로그
-**바로 확인:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              ### 🔍 상세 로그
+              **바로 확인:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-### 📊 실행 정보
-- **실행 시간:** ${{ github.event.repository.updated_at }}
-- **트리거:** \`${{ github.event_name }}\`
-- **Workflow:** \`${{ github.workflow }}\`
+              ### 📊 실행 정보
+              - **실행 시간:** ${{ github.event.repository.updated_at }}
+              - **트리거:** `${{ github.event_name }}`
+              - **Workflow:** `${{ github.workflow }}`
 
----
-> ⚠️ 이 Issue는 자동으로 생성되었습니다. 상세 로그를 확인하여 원인을 파악해주세요.`
+              ---
+              > ⚠️ 이 Issue는 자동으로 생성되었습니다. 상세 로그를 확인하여 원인을 파악해주세요.
           })
         github-token: ${{ secrets.GITHUB_TOKEN }}

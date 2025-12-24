@@ -74,6 +74,12 @@ class MultiPropertyAutomation:
 
         Args:
             search_in_ended: True이면 종료매물에서 검색, False이면 일반 매물 리스트에서 검색
+
+        Returns:
+            (bool, str): (성공여부, 상태)
+                - (True, "success"): 성공
+                - (False, "exposure_ended"): 노출종료까지만 성공
+                - (False, "failed"): 실패
         """
         retry_text = " (재시도)" if retry else ""
         print(f"\n{'='*60}")
@@ -261,7 +267,7 @@ class MultiPropertyAutomation:
 
                                     if "로켓등록" not in ad_type_text:
                                         print(f"❌ 로켓등록 상품이 아닙니다. (광고유형: {ad_type_text.strip()})")
-                                        return False  # 재시도 불필요
+                                        return (False, "failed")  # 재시도 불필요
 
                                     print(f"✅ 로켓등록 상품 확인됨")
                                 else:
@@ -274,13 +280,15 @@ class MultiPropertyAutomation:
                                 if self.test_mode:
                                     await self.simulate_update(property_number)
                                     update_success = True  # 테스트 모드는 항상 성공
+                                    status = "success"
                                 else:
                                     # 종료매물에서 검색한 경우: 재광고 버튼만 클릭하고 광고등록 페이지로 이동
                                     if search_in_ended:
                                         update_success = await self.execute_re_register_from_ended(page, row, property_number, popup_messages)
+                                        status = "success" if update_success else "failed"
                                     else:
                                         # 일반 매물 리스트: 노출종료부터 전체 프로세스
-                                        update_success = await self.execute_real_update(page, row, property_number, popup_messages)
+                                        update_success, status = await self.execute_real_update(page, row, property_number, popup_messages)
 
                                 property_found = True
                                 break
@@ -331,19 +339,19 @@ class MultiPropertyAutomation:
             
             if not property_found:
                 print(f"❌ 매물번호 {property_number}를 {current_page-1}페이지까지 검색했지만 찾을 수 없습니다.")
-                return False
+                return (False, "failed")
 
             # 매물은 찾았지만 업데이트 성공 여부 확인
             if update_success:
                 print(f"✅ 매물번호 {property_number} 처리 완료")
-                return True
+                return (True, "success")
             else:
                 print(f"❌ 매물번호 {property_number} 업데이트 실패")
-                return False
+                return (False, status)
 
         except Exception as e:
             print(f"❌ 매물번호 {property_number} 처리 실패: {e}")
-            return False
+            return (False, "failed")
     
     async def print_property_info(self, row, property_number):
         """매물 정보 출력"""
@@ -531,12 +539,22 @@ class MultiPropertyAutomation:
             return False
 
     async def execute_real_update(self, page, row, property_number, popup_messages=None):
-        """실제 업데이트 실행"""
+        """실제 업데이트 실행
+
+        Returns:
+            (bool, str): (성공여부, 상태)
+                - (True, "success"): 전체 프로세스 성공
+                - (False, "exposure_ended"): 노출종료까지만 성공
+                - (False, "failed"): 노출종료 실패
+        """
         print(f"\n🚀 매물번호 {property_number} 실제 업데이트:")
 
         # 팝업 메시지 초기화 (결제 전 메시지 클리어)
         if popup_messages is not None:
             popup_messages.clear()
+
+        # 노출종료 성공 여부 플래그
+        exposure_ended = False
 
         try:
             # 1. 노출종료
@@ -544,7 +562,7 @@ class MultiPropertyAutomation:
             end_button = await row.query_selector('#naverEnd')
             if not end_button:
                 print("❌ 노출종료 버튼을 찾을 수 없습니다.")
-                return False
+                return (False, "failed")
 
             # 팝업 오버레이 처리 함수 - Playwright API 버전
             async def handle_popup_overlay():
@@ -597,9 +615,12 @@ class MultiPropertyAutomation:
                 await page.wait_for_selector('.statusAdEnd', state='visible', timeout=10000)
                 print("✅ 노출종료 완료 (광고종료 버튼 활성화됨)")
 
+                # 노출종료 성공 플래그 설정
+                exposure_ended = True
+
             except Exception as e:
                 print(f"노출종료 버튼 클릭 중 오류: {e}")
-                return False
+                return (False, "failed")
 
             # 2. 광고종료
             print("2️⃣ 광고종료 버튼 클릭...")
@@ -660,6 +681,11 @@ class MultiPropertyAutomation:
             ''')
             print("✅ 종료매물 목록 로딩 후 팝업 오버레이 제거 완료")
 
+            # ⏳ 서버 반영 대기: 노출종료한 매물이 종료매물 목록에 반영될 때까지 추가 대기
+            print("⏳ 종료매물 목록 서버 반영 대기 중 (2초)...")
+            await page.wait_for_timeout(2000)
+            print("✅ 서버 반영 대기 완료")
+
             # 3. 재광고
             print("3️⃣ 종료매물에서 재광고 버튼 검색...")
             end_rows = await page.query_selector_all('table tbody tr')
@@ -704,7 +730,7 @@ class MultiPropertyAutomation:
 
             if not found_in_ended:
                 print(f"   ❌ 종료매물에서 매물번호 {property_number}를 찾을 수 없습니다.")
-                return False
+                return (False, "exposure_ended")
 
             # 4. 광고등록
             print("4️⃣ 광고등록 페이지 처리...")
@@ -766,13 +792,13 @@ class MultiPropertyAutomation:
             # 체크박스가 체크되지 않으면 실패 처리
             if not checkbox_checked:
                 print(f"   ❌ 체크박스 클릭 실패 - 매물번호 {property_number} 업데이트 실패")
-                return False
+                return (False, "exposure_ended")
 
             # 체크박스 체크 후에만 결제하기 버튼 클릭
             payment_button = await page.query_selector('#naverSendSave')
             if not payment_button:
                 print("   ❌ 결제하기 버튼을 찾을 수 없음")
-                return False
+                return (False, "exposure_ended")
 
             await payment_button.click()
             print("   ✅ 결제하기 버튼 클릭 완료")
@@ -803,16 +829,16 @@ class MultiPropertyAutomation:
                     for msg in popup_messages:
                         if "동의해 주세요" in msg or "동의" in msg:
                             print(f"   ❌ 체크박스 미동의로 결제 실패: {msg}")
-                            return False
+                            return (False, "exposure_ended")
 
             # 성공 메시지 확인
             if not payment_success:
                 print(f"   ❌ 결제 완료 확인 실패 - '로켓전송이 완료되었습니다' alert를 받지 못함")
                 print(f"   📋 받은 팝업 메시지: {popup_messages if popup_messages else '없음'}")
-                return False
+                return (False, "exposure_ended")
 
             print(f"🎉 매물번호 {property_number} 실제 업데이트 완료!")
-            return True
+            return (True, "success")
 
         except Exception as e:
             print(f"❌ 실제 업데이트 중 오류: {e}")
@@ -822,7 +848,7 @@ class MultiPropertyAutomation:
                 print(f"📸 오류 스크린샷 저장: error_screenshot_{property_number}.png")
             except:
                 pass
-            return False
+            return (False, "exposure_ended" if exposure_ended else "failed")
     
     async def run_automation(self):
         """다중 매물 자동화 실행"""
@@ -895,16 +921,16 @@ class MultiPropertyAutomation:
                 
                 # 각 매물 순차 처리
                 success_count = 0
-                failed_properties = []
-                retry_failed = []  # 전역 변수로 선언
+                failed_properties = {}  # 딕셔너리로 변경: {property_number: status}
+                retry_failed = []
 
                 for i, property_number in enumerate(self.property_numbers, 1):
-                    success = await self.process_single_property(page, property_number, i, len(self.property_numbers), last_popup_messages)
+                    success, status = await self.process_single_property(page, property_number, i, len(self.property_numbers), last_popup_messages)
 
                     if success:
                         success_count += 1
                     else:
-                        failed_properties.append(property_number)
+                        failed_properties[property_number] = status
                     
                     # 매물 간 대기
                     if i < len(self.property_numbers):
@@ -916,11 +942,20 @@ class MultiPropertyAutomation:
                     print(f"\n🔄 실패한 {len(failed_properties)}개 매물 재시도 중...")
                     print("="*60)
 
-                    # retry_failed 이미 전역 변수로 선언됨
-                    for i, property_number in enumerate(failed_properties, 1):
-                        print(f"\n[재시도 {i}/{len(failed_properties)}] 매물번호 {property_number}")
-                        # 종료매물에서 검색하도록 search_in_ended=True 전달
-                        success = await self.process_single_property(page, property_number, i, len(failed_properties), last_popup_messages, retry=True, search_in_ended=True)
+                    for i, (property_number, fail_status) in enumerate(failed_properties.items(), 1):
+                        print(f"\n[재시도 {i}/{len(failed_properties)}] 매물번호 {property_number} (상태: {fail_status})")
+
+                        # 상태에 따라 재시도 위치 결정
+                        if fail_status == "exposure_ended":
+                            # 노출종료 완료 → 종료매물에서 재시도
+                            print(f"   📍 노출종료 완료됨 → 종료매물 목록에서 재시도")
+                            search_in_ended = True
+                        else:
+                            # 노출종료 미완료 → 매물리스트에서 재시도
+                            print(f"   📍 노출종료 미완료 → 일반 매물 리스트에서 재시도")
+                            search_in_ended = False
+
+                        success, status = await self.process_single_property(page, property_number, i, len(failed_properties), last_popup_messages, retry=True, search_in_ended=search_in_ended)
 
                         if success:
                             success_count += 1

@@ -230,22 +230,40 @@ class MultiPropertyAutomation:
                         }
                     ''')
                     print("✅ 종료매물 목록 로딩 후 팝업 오버레이 제거 완료")
+
+                    # 종료매물은 1페이지만 확인 (최신 매물이 맨 위에 있음)
+                    max_pages = 1
+                    print("📍 종료매물 재시도: 1페이지만 확인")
                 except Exception as e:
                     print(f"❌ 종료매물 테이블 이동 실패: {e}")
                     return False
-            
+            else:
+                # 일반 매물 리스트: 전체 매물 개수 조회 및 최대 페이지 계산
+                try:
+                    total_count_element = await page.query_selector('#wrap > div.container > div > div > div.sectionWrap > div.statusWrap.ver3 > div.statusItem.statusAll.GTM_offerings_ad_list_total > span.cnt')
+                    if total_count_element:
+                        total_count_text = await total_count_element.inner_text()
+                        total_count = int(total_count_text.strip().replace(',', ''))
+                        max_pages = (total_count + 49) // 50  # 50개씩, 올림
+                        print(f"📊 전체 매물: {total_count}개 → 최대 {max_pages}페이지까지 검색")
+                    else:
+                        max_pages = 10  # 기본값
+                        print(f"⚠️ 전체 매물 개수 확인 실패 - 최대 {max_pages}페이지까지 검색")
+                except Exception as e:
+                    max_pages = 10  # 기본값
+                    print(f"⚠️ 전체 매물 개수 조회 실패: {e} - 최대 {max_pages}페이지까지 검색")
+
             # 매물 검색 (페이지네이션 포함)
             property_found = False
             current_page = 1
-            max_pages = 10
-            
+
             while not property_found and current_page <= max_pages:
                 print(f"📄 {current_page}페이지에서 매물 검색 중...")
-                
-                # 테이블 찾기
-                await page.wait_for_selector('table tbody tr', timeout=30000)
-                rows = await page.query_selector_all('table tbody tr')
-                
+
+                # 테이블 찾기 (adComplete 클래스만)
+                await page.wait_for_selector('table tbody tr.adComplete', timeout=30000)
+                rows = await page.query_selector_all('table tbody tr.adComplete')
+
                 print(f"📊 {current_page}페이지 매물 수: {len(rows)}개")
 
                 # 현재 페이지에서 매물 검색
@@ -317,10 +335,31 @@ class MultiPropertyAutomation:
 
                         # 새 페이지 로딩 대기
                         try:
-                            await page.wait_for_selector('table tbody tr', timeout=15000)
+                            await page.wait_for_selector('table tbody tr.adComplete', timeout=15000)
                             print(f"✅ {current_page+1}페이지 로딩 완료")
                         except:
                             print(f"⚠️ {current_page+1}페이지 로딩 실패 - 계속 진행")
+
+                        # 페이지 로딩 후 팝업 제거
+                        await page.evaluate('''
+                            () => {
+                                const popups = document.querySelectorAll('img[src*="popup"], div[class*="popup"], div[id*="popup"], .modal, .overlay');
+                                popups.forEach(popup => {
+                                    popup.style.display = 'none';
+                                    popup.style.visibility = 'hidden';
+                                    popup.remove();
+                                });
+                                const highZIndexElements = document.querySelectorAll('*');
+                                highZIndexElements.forEach(el => {
+                                    const zIndex = window.getComputedStyle(el).zIndex;
+                                    if (zIndex && parseInt(zIndex) > 1000) {
+                                        el.style.display = 'none';
+                                        el.remove();
+                                    }
+                                });
+                            }
+                        ''')
+                        print(f"✅ {current_page+1}페이지 로딩 후 팝업 제거 완료")
 
                         current_page += 1
 

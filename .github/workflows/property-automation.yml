@@ -3,9 +3,10 @@
 
 name: Property Automation
 
-# Git Push 권한 추가
+# Git Push 및 Issue 생성 권한 추가
 permissions:
   contents: write
+  issues: write
 
 on:
   # 매일 자정 1분에 자동 실행
@@ -66,7 +67,12 @@ jobs:
     container:
       image: mcr.microsoft.com/playwright/python:v1.55.0-noble
     if: needs.check-schedule.outputs.has_schedule == 'true' || github.event.inputs.property_numbers != ''
-    
+    outputs:
+      has_failures: ${{ steps.automation_run.outputs.has_failures }}
+      failed_properties: ${{ steps.automation_run.outputs.failed_properties }}
+      success_count: ${{ steps.automation_run.outputs.success_count }}
+      total_count: ${{ steps.automation_run.outputs.total_count }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -222,7 +228,7 @@ jobs:
         echo "- 실패: ${failed}개"
 
         # 실패 감지: 1개라도 실패하면 has_failures=true로 설정
-        if [ "${{ steps.automation_run.outputs.has_failures }}" == "true" ] || [ "${{ steps.automation_run.outputs.success_count }}" != "${{ steps.automation_run.outputs.total_count }}" ]; then
+        if [ "${{ steps.automation_run.outputs.has_failures }}" = "true" ] || [ "${{ steps.automation_run.outputs.success_count }}" != "${{ steps.automation_run.outputs.total_count }}" ]; then
           echo ""
           echo "::error::❌ 매물 자동화 실패 발생!"
           echo "::error::실패한 매물 번호: ${{ steps.automation_run.outputs.failed_properties }}"
@@ -234,7 +240,7 @@ jobs:
           echo "  - 체크박스 클릭 실패"
           echo "  - 결제 처리 실패"
           echo "  - 네트워크 오류 또는 타임아웃"
-          exit 1
+          # exit 1 제거: 매물 실패는 automation job을 failure로 만들지 않음
         else
           echo "✅ 모든 매물 처리 성공!"
         fi
@@ -272,7 +278,7 @@ jobs:
         echo "2. GitHub에 scheduled_properties.json 업로드"
         echo "3. 다음 자정에 자동 실행됨"
 
-  # 모든 오류 감지 및 알림 (컨테이너 오류 포함)
+  # 모든 오류 감지 및 알림 (매물 실패 + 시스템 오류)
   final-check:
     needs: [check-schedule, automation]
     runs-on: ubuntu-latest
@@ -284,7 +290,13 @@ jobs:
       run: |
         echo "📊 최종 상태 확인"
 
-        # automation job 결과 확인
+        # 매물 처리 실패 체크
+        if [ "${{ needs.automation.outputs.has_failures }}" == "true" ]; then
+          echo "has_property_failures=true" >> $GITHUB_OUTPUT
+          echo "::warning::⚠️ 일부 매물 처리 실패"
+        fi
+
+        # automation job 시스템 오류 확인
         if [ "${{ needs.automation.result }}" == "failure" ]; then
           echo "::error::❌ 자동화 실행 실패!"
           echo "::error::컨테이너 오류, 스크립트 오류 또는 시스템 오류가 발생했습니다."
@@ -308,6 +320,31 @@ jobs:
           echo "✅ 자동화 정상 완료"
         fi
 
+    - name: Create issue on property failures
+      if: always() && steps.workflow_status.outputs.has_property_failures == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const repository = '${{ github.repository }}';
+          const runId = '${{ github.run_id }}';
+          const eventName = '${{ github.event_name }}';
+          const workflow = '${{ github.workflow }}';
+
+          const failedProperties = '${{ needs.automation.outputs.failed_properties }}' || '없음';
+          const successCount = '${{ needs.automation.outputs.success_count }}' || '0';
+          const totalCount = '${{ needs.automation.outputs.total_count }}' || '0';
+          const failedCount = totalCount - successCount;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: '매물 처리 실패 - ' + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
+            labels: ['automation-error', 'property-failure'],
+            body: "**처리 결과:** " + failedCount + "/" + totalCount + "개 실패\n\n" +
+              "**실패 매물 번호:** " + failedProperties
+          })
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Create issue on system error
       if: failure() && steps.workflow_status.outputs.has_system_error == 'true'
       uses: actions/github-script@v7
@@ -320,29 +357,14 @@ jobs:
           const workflow = '${{ github.workflow }}';
           const updatedAt = '${{ github.event.repository.updated_at }}';
 
-          // 실패 정보 추출
-          const failedProperties = '${{ needs.automation.outputs.automation_run.outputs.failed_properties }}' || '없음';
-          const successCount = '${{ needs.automation.outputs.automation_run.outputs.success_count }}' || '0';
-          const totalCount = '${{ needs.automation.outputs.automation_run.outputs.total_count }}' || '0';
-          const failedCount = totalCount - successCount;
-
-          let failureInfo = "";
-          if (failedProperties !== '없음' && failedProperties !== '') {
-            failureInfo = "### 실패한 매물 정보\\n" +
-              "- **실패 매물 번호:** " + failedProperties + "\\n" +
-              "- **처리 결과:** " + successCount + "/" + totalCount + "개 성공\\n" +
-              "- **실패 개수:** " + failedCount + "개\\n\\n";
-          }
-
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: '🚨 자동화 시스템 오류 - ' + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
+            title: '시스템 오류 - ' + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
             labels: ['automation-error', 'system-error'],
             body: "## 네이버부동산 자동화 시스템 오류\\n\\n" +
               "### 오류 유형\\n" +
               "- **자동화 Job 실행 실패:** `" + result + "`\\n\\n" +
-              failureInfo +
               "### 가능한 시스템 오류 원인\\n" +
               "- Docker 컨테이너 시작 실패\\n" +
               "- Playwright 이미지 다운로드 오류\\n" +

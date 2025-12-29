@@ -894,10 +894,10 @@ class MultiPropertyAutomation:
         print("\n" + "="*80)
         print(f"🚀 다중 매물 자동화 시작 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*80)
-        
+
         if not self.property_numbers:
             print("❌ 처리할 매물번호가 없습니다.")
-            return
+            sys.exit(1)  # 실패로 종료
         
         async with async_playwright() as p:
             try:
@@ -956,7 +956,8 @@ class MultiPropertyAutomation:
                 login_success = await self.login(page)
                 if not login_success:
                     print("❌ 로그인 실패로 자동화 중단")
-                    return
+                    await browser.close()
+                    sys.exit(1)  # 로그인 실패로 종료
                 
                 # 각 매물 순차 처리
                 success_count = 0
@@ -1030,6 +1031,7 @@ class MultiPropertyAutomation:
                     await browser.close()
                 except:
                     pass
+                sys.exit(1)  # 예외 발생 시 실패로 종료
 
 async def main():
     automation = MultiPropertyAutomation()

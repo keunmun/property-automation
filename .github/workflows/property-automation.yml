@@ -98,14 +98,33 @@ jobs:
     
     - name: Run multi-property automation
       id: automation_run
-      continue-on-error: true
       run: |
         echo "🚀 다중 매물 자동화 시작..."
         echo "📋 처리할 매물: ${{ steps.properties.outputs.properties }}"
         echo "📊 매물 개수: $(echo '${{ steps.properties.outputs.properties }}' | tr ',' '\n' | wc -l)"
         echo "🔧 테스트 모드: ${{ github.event.inputs.test_mode || 'false' }}"
 
+        # Python 스크립트 실행 (exit code 캡처)
+        set +e  # 오류 발생 시에도 계속 실행
         python multi_property_automation.py 2>&1 | tee automation.log
+        exit_code=$?
+        set -e
+
+        echo "script_exit_code=${exit_code}" >> $GITHUB_OUTPUT
+
+        # 로그인 실패 감지
+        if grep -q "❌ 로그인 실패로 자동화 중단" automation.log; then
+          echo "has_login_failure=true" >> $GITHUB_OUTPUT
+          echo "::error::로그인 실패로 자동화 중단됨"
+          exit 1
+        fi
+
+        # 시스템 오류 감지 (exit code가 0이 아닌 경우)
+        if [ ${exit_code} -ne 0 ]; then
+          echo "has_system_error=true" >> $GITHUB_OUTPUT
+          echo "::error::Python 스크립트 실행 실패 (exit code: ${exit_code})"
+          exit 1
+        fi
 
         # 실패한 매물 추출
         if grep -q "❌ 최종 실패:" automation.log; then
@@ -218,30 +237,28 @@ jobs:
       if: always()
       run: |
         echo "📊 자동화 실행 결과:"
-        echo "- 전체: ${{ steps.automation_run.outputs.total_count }}개"
-        echo "- 성공: ${{ steps.automation_run.outputs.success_count }}개"
+
+        # 빈 값 처리
+        total="${{ steps.automation_run.outputs.total_count }}"
+        success="${{ steps.automation_run.outputs.success_count }}"
+
+        if [ -z "$total" ]; then total=0; fi
+        if [ -z "$success" ]; then success=0; fi
+
+        echo "- 전체: ${total}개"
+        echo "- 성공: ${success}개"
 
         # 실패 개수 계산
-        total=${{ steps.automation_run.outputs.total_count }}
-        success=${{ steps.automation_run.outputs.success_count }}
         failed=$((total - success))
         echo "- 실패: ${failed}개"
 
-        # 실패 감지: 1개라도 실패하면 has_failures=true로 설정
-        if [ "${{ steps.automation_run.outputs.has_failures }}" = "true" ] || [ "${{ steps.automation_run.outputs.success_count }}" != "${{ steps.automation_run.outputs.total_count }}" ]; then
+        # 실패 감지: 1개라도 실패하면 경고 출력 (automation job은 이미 실패 처리됨)
+        if [ "${{ steps.automation_run.outputs.has_failures }}" = "true" ]; then
           echo ""
-          echo "::error::❌ 매물 자동화 실패 발생!"
-          echo "::error::실패한 매물 번호: ${{ steps.automation_run.outputs.failed_properties }}"
-          echo "::error::처리 결과: ${{ steps.automation_run.outputs.success_count }}/${{ steps.automation_run.outputs.total_count }}개 성공"
-          echo ""
-          echo "📋 가능한 실패 사유:"
-          echo "  - 매물을 찾을 수 없음 (삭제되었거나 이미 처리됨)"
-          echo "  - 로켓등록 상품이 아님"
-          echo "  - 체크박스 클릭 실패"
-          echo "  - 결제 처리 실패"
-          echo "  - 네트워크 오류 또는 타임아웃"
-          # exit 1 제거: 매물 실패는 automation job을 failure로 만들지 않음
-        else
+          echo "::warning::⚠️ 일부 매물 처리 실패"
+          echo "::warning::실패한 매물 번호: ${{ steps.automation_run.outputs.failed_properties }}"
+          echo "::warning::처리 결과: ${success}/${total}개 성공"
+        elif [ ${total} -gt 0 ] && [ ${success} -eq ${total} ]; then
           echo "✅ 모든 매물 처리 성공!"
         fi
 
@@ -289,35 +306,48 @@ jobs:
       id: workflow_status
       run: |
         echo "📊 최종 상태 확인"
+        echo ""
+        echo "🔍 Automation Job 상태: ${{ needs.automation.result }}"
+        echo ""
 
-        # 매물 처리 실패 체크
-        if [ "${{ needs.automation.outputs.has_failures }}" == "true" ]; then
-          echo "has_property_failures=true" >> $GITHUB_OUTPUT
-          echo "::warning::⚠️ 일부 매물 처리 실패"
-        fi
-
-        # automation job 시스템 오류 확인
+        # automation job 실패 확인 (로그인 실패, 시스템 오류 등)
         if [ "${{ needs.automation.result }}" == "failure" ]; then
           echo "::error::❌ 자동화 실행 실패!"
-          echo "::error::컨테이너 오류, 스크립트 오류 또는 시스템 오류가 발생했습니다."
           echo ""
-          echo "📋 가능한 오류 원인:"
-          echo "  - Docker 컨테이너 시작 실패 (이미지 오류)"
-          echo "  - Playwright 설치 오류"
-          echo "  - Python 스크립트 실행 오류"
-          echo "  - 네트워크 타임아웃"
+
+          # 로그에서 실패 원인 파악
+          echo "📋 감지된 오류 유형:"
+
+          # 로그인 실패 여부 확인 (automation job에서 설정)
+          echo "  - 로그인 실패 여부: 확인 필요"
+          echo "  - 시스템 오류 여부: 확인 필요"
           echo ""
+
           echo "🔍 상세 로그: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo "has_system_error=true" >> $GITHUB_OUTPUT
+
+          # failure_reason 추출 시도
+          echo "failure_reason=시스템 오류 또는 로그인 실패" >> $GITHUB_OUTPUT
           exit 1
+
         elif [ "${{ needs.automation.result }}" == "cancelled" ]; then
           echo "::error::⚠️ 자동화 실행이 취소되었습니다."
           echo "has_system_error=true" >> $GITHUB_OUTPUT
+          echo "failure_reason=실행 취소됨" >> $GITHUB_OUTPUT
           exit 1
+
         elif [ "${{ needs.automation.result }}" == "skipped" ]; then
           echo "::warning::⏭️ 자동화 실행이 건너뛰어졌습니다."
+          echo "failure_reason=실행 건너뜀" >> $GITHUB_OUTPUT
+
         else
-          echo "✅ 자동화 정상 완료"
+          # automation job 성공 시에도 매물 실패 체크
+          if [ "${{ needs.automation.outputs.has_failures }}" == "true" ]; then
+            echo "has_property_failures=true" >> $GITHUB_OUTPUT
+            echo "::warning::⚠️ 일부 매물 처리 실패 (자동화는 정상 실행됨)"
+          else
+            echo "✅ 자동화 정상 완료 (모든 매물 처리 성공)"
+          fi
         fi
 
     - name: Create issue on property failures
@@ -345,40 +375,56 @@ jobs:
           })
         github-token: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Download automation logs
+      if: failure() && steps.workflow_status.outputs.has_system_error == 'true'
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: automation-logs-${{ github.run_number }}
+        path: ./logs
+
+    - name: Extract failure reason from logs
+      if: failure() && steps.workflow_status.outputs.has_system_error == 'true'
+      id: extract_reason
+      continue-on-error: true
+      run: |
+        if [ -f "./logs/automation.log" ]; then
+          # 로그인 실패 확인
+          if grep -q "❌ 로그인 실패로 자동화 중단" ./logs/automation.log; then
+            echo "failure_type=🔐 로그인 실패" >> $GITHUB_OUTPUT
+            login_url=$(grep "로그인 후 URL:" ./logs/automation.log | tail -1 | sed 's/🔗 로그인 후 URL: //' || echo "URL 확인 불가")
+            echo "failure_details=${login_url}" >> $GITHUB_OUTPUT
+          # 매물번호 없음
+          elif grep -q "❌ 처리할 매물번호가 없습니다" ./logs/automation.log; then
+            echo "failure_type=📋 매물번호 없음" >> $GITHUB_OUTPUT
+            echo "failure_details=환경변수에 매물번호가 설정되지 않음" >> $GITHUB_OUTPUT
+          # 기타 Python 오류
+          elif grep -q "❌ 자동화 실행 실패:" ./logs/automation.log; then
+            error_msg=$(grep "❌ 자동화 실행 실패:" ./logs/automation.log | tail -1 | sed 's/❌ 자동화 실행 실패: //')
+            echo "failure_type=⚠️ Python 스크립트 오류" >> $GITHUB_OUTPUT
+            echo "failure_details=${error_msg}" >> $GITHUB_OUTPUT
+          else
+            echo "failure_type=❓ 알 수 없는 오류" >> $GITHUB_OUTPUT
+            echo "failure_details=로그에서 오류 원인을 찾을 수 없음" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "failure_type=📁 로그 파일 없음" >> $GITHUB_OUTPUT
+          echo "failure_details=automation.log 파일을 찾을 수 없음" >> $GITHUB_OUTPUT
+        fi
+
     - name: Create issue on system error
       if: failure() && steps.workflow_status.outputs.has_system_error == 'true'
       uses: actions/github-script@v7
       with:
         script: |
-          const result = '${{ needs.automation.result }}';
-          const repository = '${{ github.repository }}';
-          const runId = '${{ github.run_id }}';
-          const eventName = '${{ github.event_name }}';
-          const workflow = '${{ github.workflow }}';
-          const updatedAt = '${{ github.event.repository.updated_at }}';
+          const failureType = '${{ steps.extract_reason.outputs.failure_type }}' || '❓ 알 수 없는 오류';
+          const failureDetails = '${{ steps.extract_reason.outputs.failure_details }}' || '없음';
 
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: '시스템 오류 - ' + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
+            title: '자동화 실패 - ' + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
             labels: ['automation-error', 'system-error'],
-            body: "## 네이버부동산 자동화 시스템 오류\\n\\n" +
-              "### 오류 유형\\n" +
-              "- **자동화 Job 실행 실패:** `" + result + "`\\n\\n" +
-              "### 가능한 시스템 오류 원인\\n" +
-              "- Docker 컨테이너 시작 실패\\n" +
-              "- Playwright 이미지 다운로드 오류\\n" +
-              "- Python 패키지 설치 오류\\n" +
-              "- 네트워크 연결 타임아웃\\n" +
-              "- GitHub Actions 시스템 장애\\n" +
-              "- Python 스크립트 크래시\\n\\n" +
-              "### 상세 로그\\n" +
-              "**바로 확인:** https://github.com/" + repository + "/actions/runs/" + runId + "\\n\\n" +
-              "### 실행 정보\\n" +
-              "- **실행 시간:** " + updatedAt + "\\n" +
-              "- **트리거:** `" + eventName + "`\\n" +
-              "- **Workflow:** `" + workflow + "`\\n\\n" +
-              "---\\n" +
-              "> 이 Issue는 자동으로 생성되었습니다. 상세 로그를 확인하여 원인을 파악해주세요."
+            body: failureType + "\n\n**실패 원인:** " + failureDetails
           })
         github-token: ${{ secrets.GITHUB_TOKEN }}

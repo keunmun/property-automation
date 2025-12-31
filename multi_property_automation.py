@@ -260,9 +260,15 @@ class MultiPropertyAutomation:
             while not property_found and current_page <= max_pages:
                 print(f"📄 {current_page}페이지에서 매물 검색 중...")
 
-                # 테이블 찾기 (adComplete 클래스만)
-                await page.wait_for_selector('table tbody tr.adComplete', timeout=30000)
-                rows = await page.query_selector_all('table tbody tr.adComplete')
+                # 테이블 찾기 (종료매물이면 클래스 필터 없이, 일반 매물이면 adComplete만)
+                if search_in_ended:
+                    # 종료매물: 클래스 필터 없이 모든 tr 검색
+                    await page.wait_for_selector('table tbody tr', timeout=30000)
+                    rows = await page.query_selector_all('table tbody tr')
+                else:
+                    # 일반 매물: adComplete 클래스만 검색
+                    await page.wait_for_selector('table tbody tr.adComplete', timeout=30000)
+                    rows = await page.query_selector_all('table tbody tr.adComplete')
 
                 print(f"📊 {current_page}페이지 매물 수: {len(rows)}개")
 
@@ -333,9 +339,12 @@ class MultiPropertyAutomation:
                         # 페이지 로딩 대기
                         await page.wait_for_timeout(2000)
 
-                        # 새 페이지 로딩 대기
+                        # 새 페이지 로딩 대기 (종료매물이면 클래스 필터 없이)
                         try:
-                            await page.wait_for_selector('table tbody tr.adComplete', timeout=15000)
+                            if search_in_ended:
+                                await page.wait_for_selector('table tbody tr', timeout=15000)
+                            else:
+                                await page.wait_for_selector('table tbody tr.adComplete', timeout=15000)
                             print(f"✅ {current_page+1}페이지 로딩 완료")
                         except:
                             print(f"⚠️ {current_page+1}페이지 로딩 실패 - 계속 진행")

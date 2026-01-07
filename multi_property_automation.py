@@ -8,8 +8,8 @@ from playwright.async_api import async_playwright
 
 class MultiPropertyAutomation:
     def __init__(self):
-        self.login_id = os.getenv('LOGIN_ID', 'keunmun')
-        self.login_pw = os.getenv('LOGIN_PASSWORD', 'tjsrb1234!')
+        self.login_id = os.getenv('LOGIN_ID', '')
+        self.login_pw = os.getenv('LOGIN_PASSWORD', '')
         self.login_url = "https://www.aipartner.com/integrated/login?serviceCode=1000"
         self.ad_list_url = "https://www.aipartner.com/offerings/ad_list"
         
@@ -39,34 +39,30 @@ class MultiPropertyAutomation:
 
         await page.fill('#member-id', self.login_id)
         await page.fill('#member-pw', self.login_pw)
-
-        # 로그인 버튼 클릭 후 네비게이션 대기
         print("🔐 로그인 버튼 클릭...")
-        async with page.expect_navigation(timeout=30000, wait_until='domcontentloaded'):
-            await page.click('#integrated-login > a')
+        await page.click('#integrated-login > a')
 
-        # ✅ Playwright API: 페이지 로드 상태 기반 대기
+        # 로그인 완료 대기
+        print("⏳ 로그인 후 리다이렉트 대기 중...")
         try:
-            await page.wait_for_load_state('domcontentloaded', timeout=5000)
-        except:
-            # 타임아웃되어도 계속 진행
-            await page.wait_for_timeout(1000)
+            await page.wait_for_url('**/offerings/ad_list', timeout=10000)
+            print(f"🔗 로그인 후 URL: {page.url}")
+            print("✅ 로그인 완료")
+        except Exception as e:
+            # 타임아웃 시 현재 URL 확인
+            current_url = page.url
+            print(f"⚠️ 리다이렉트 타임아웃 - 현재 URL: {current_url}")
 
-        # 로그인 성공 확인 (안전한 방식)
-        await page.wait_for_timeout(500)  # 짧은 대기로 페이지 안정화
+            # 여전히 로그인 페이지에 있으면 에러
+            if '/integrated/login' in current_url:
+                print("❌ 로그인 실패: 매물 리스트 페이지로 리다이렉트되지 않음")
+                print(f"   현재 URL: {current_url}")
+                return False
+            else:
+                # 다른 페이지로 이동했으면 성공으로 간주
+                print(f"✅ 로그인 완료 (대체 URL: {current_url})")
 
-        current_url = page.url
-        print(f"🔗 로그인 후 URL: {current_url}")
-
-        # URL 기반으로 로그인 성공 확인
-        is_login_page = 'login' in current_url.lower()
-
-        if is_login_page:
-            print("❌ 로그인 실패 - 여전히 로그인 페이지에 있음")
-            return False
-
-        print("✅ 로그인 완료")
-        # 브라우저 안정화 대기 (ERR_ABORTED 방지)
+        # 브라우저 안정화를 위한 추가 대기
         print("⏳ 브라우저 안정화 대기 중...")
         await page.wait_for_timeout(2000)
         print("✅ 브라우저 안정화 완료")

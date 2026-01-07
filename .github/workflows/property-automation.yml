@@ -350,6 +350,55 @@ jobs:
           fi
         fi
 
+    - name: Download automation logs for failure details
+      if: always() && steps.workflow_status.outputs.has_property_failures == 'true'
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: automation-logs-${{ github.run_number }}
+        path: ./logs
+
+    - name: Extract failure stage details
+      if: always() && steps.workflow_status.outputs.has_property_failures == 'true'
+      id: extract_stages
+      continue-on-error: true
+      run: |
+        if [ -f "./logs/automation.log" ]; then
+          # 실패 단계별 상세 정보 추출
+          stage_details=""
+
+          # 노출종료 실패
+          if grep -q "📋 노출종료 실패:" ./logs/automation.log; then
+            exposure_failed=$(grep "📋 노출종료 실패:" ./logs/automation.log | tail -1 | sed 's/.*📋 노출종료 실패: //')
+            stage_details="${stage_details}\n📋 노출종료 실패: ${exposure_failed}"
+          fi
+
+          # 광고 저장됨 (결제 안됨)
+          if grep -q "📝 광고 저장됨(결제안됨):" ./logs/automation.log; then
+            saved_failed=$(grep "📝 광고 저장됨(결제안됨):" ./logs/automation.log | tail -1 | sed 's/.*📝 광고 저장됨(결제안됨): //')
+            stage_details="${stage_details}\n📝 광고 저장됨(결제안됨): ${saved_failed}"
+          fi
+
+          # 충전금 부족
+          if grep -q "💰 충전금 부족:" ./logs/automation.log; then
+            insufficient_failed=$(grep "💰 충전금 부족:" ./logs/automation.log | tail -1 | sed 's/.*💰 충전금 부족: //')
+            stage_details="${stage_details}\n💰 충전금 부족: ${insufficient_failed}"
+          fi
+
+          # 결제 실패
+          if grep -q "💳 결제 실패:" ./logs/automation.log; then
+            payment_failed=$(grep "💳 결제 실패:" ./logs/automation.log | tail -1 | sed 's/.*💳 결제 실패: //')
+            stage_details="${stage_details}\n💳 결제 실패: ${payment_failed}"
+          fi
+
+          # 멀티라인 출력을 위한 처리
+          echo "stage_details<<EOF" >> $GITHUB_OUTPUT
+          echo -e "${stage_details}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        else
+          echo "stage_details=로그 파일 없음" >> $GITHUB_OUTPUT
+        fi
+
     - name: Create issue on property failures
       if: always() && steps.workflow_status.outputs.has_property_failures == 'true'
       uses: actions/github-script@v7
@@ -364,6 +413,7 @@ jobs:
           const successCount = '${{ needs.automation.outputs.success_count }}' || '0';
           const totalCount = '${{ needs.automation.outputs.total_count }}' || '0';
           const failedCount = totalCount - successCount;
+          const stageDetails = `${{ steps.extract_stages.outputs.stage_details }}` || '상세 정보 없음';
 
           await github.rest.issues.create({
             owner: context.repo.owner,
@@ -371,7 +421,8 @@ jobs:
             title: '매물 처리 실패 - ' + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
             labels: ['automation-error', 'property-failure'],
             body: "**처리 결과:** " + failedCount + "/" + totalCount + "개 실패\n\n" +
-              "**실패 매물 번호:** " + failedProperties
+              "**실패 매물 번호:** " + failedProperties + "\n\n" +
+              "**실패 단계별 상세:**\n" + stageDetails
           })
         github-token: ${{ secrets.GITHUB_TOKEN }}
 

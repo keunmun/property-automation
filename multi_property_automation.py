@@ -22,10 +22,7 @@ class MultiPropertyAutomation:
         
         self.test_mode = os.getenv('TEST_MODE', 'false').lower() == 'true'
 
-        # numberN -> numberA 매핑 (결제대기 상태 매물 검색용)
-        self.number_mapping = {}  # {numberN: numberA}
-
-        # numberN → fullName 매핑 저장 (saved 재시도용)
+        # numberN → fullName 매핑 저장 (결제 실패 시 재시도용)
         self.fullname_mapping = {}  # {numberN: fullName}
 
         print(f"🔧 로그인 ID: {self.login_id}")
@@ -344,9 +341,13 @@ class MultiPropertyAutomation:
                         # 새 페이지 로딩 대기 (종료매물이면 클래스 필터 없이)
                         try:
                             if search_in_ended:
-                                await page.wait_for_selector('table tbody tr', timeout=15000)
+                                await page.wait_for_selector('table tbody tr', timeout=8000)
                             else:
-                                await page.wait_for_selector('table tbody tr.adComplete', timeout=15000)
+                                await page.wait_for_selector('table tbody tr', timeout=8000)
+
+                            # 행이 충분히 로드될 때까지 추가 대기
+                            await page.wait_for_timeout(500)
+
                             print(f"✅ {current_page+1}페이지 로딩 완료")
                         except:
                             print(f"⚠️ {current_page+1}페이지 로딩 실패 - 계속 진행")
@@ -476,25 +477,9 @@ class MultiPropertyAutomation:
             # 팝업 제거
             await self.remove_popups(page)
 
-            # 전체 매물 개수 조회 및 최대 페이지 계산
-            try:
-                total_count_element = await page.query_selector('#wrap > div.container > div > div > div.sectionWrap > div.statusWrap.ver3 > div.statusItem.statusAll.GTM_offerings_ad_list_total > span.cnt')
-                if total_count_element:
-                    total_count_text = await total_count_element.inner_text()
-                    total_count = int(total_count_text.strip().replace(',', ''))
-                    max_pages = (total_count + 49) // 50
-                    print(f"📊 전체 매물: {total_count}개 → 최대 {max_pages}페이지까지 검색")
-                else:
-                    max_pages = 10
-            except Exception as e:
-                max_pages = 10
-                print(f"⚠️ 전체 매물 개수 조회 실패: {e}")
-
-            # 각 매물번호에 대해 검색 및 노출종료
             for idx, property_number in enumerate(self.property_numbers, 1):
                 print(f"\n[{idx}/{len(self.property_numbers)}] 매물번호 {property_number} 검색 중...")
 
-                # 매물 리스트 첫 페이지로 이동
                 await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
                 await page.wait_for_selector('table tbody tr.adComplete', timeout=30000)
                 await self.remove_popups(page)
@@ -502,8 +487,7 @@ class MultiPropertyAutomation:
                 property_found = False
                 current_page = 1
 
-                # 페이지네이션을 통해 매물 검색
-                while not property_found and current_page <= max_pages:
+                while not property_found:
                     print(f"   📄 {current_page}페이지에서 검색 중...")
 
                     rows = await page.query_selector_all('table tbody tr.adComplete')
@@ -516,7 +500,6 @@ class MultiPropertyAutomation:
                                 if property_number in number_text.strip():
                                     print(f"   🎯 매물번호 {property_number} 발견!")
 
-                                    # 광고유형 확인
                                     ad_type_cell = await row.query_selector('td:nth-child(8)')
                                     if ad_type_cell:
                                         ad_type_text = await ad_type_cell.inner_text()
@@ -526,17 +509,14 @@ class MultiPropertyAutomation:
                                             property_found = True
                                             break
 
-                                    # 매물 정보 출력
                                     await self.print_property_info(row, property_number)
 
-                                    # 테스트 모드 처리
                                     if self.test_mode:
                                         print(f"   🧪 [테스트 모드] 노출종료 시뮬레이션")
                                         result[property_number] = (True, None)
                                         property_found = True
                                         break
 
-                                    # 노출종료 실행
                                     success = await self.execute_single_exposure_end(page, row, property_number, popup_messages)
                                     result[property_number] = (success, None)
                                     property_found = True
@@ -548,7 +528,6 @@ class MultiPropertyAutomation:
                     if property_found:
                         break
 
-                    # 다음 페이지로 이동
                     if not await self.goto_next_page(page, current_page):
                         break
                     current_page += 1
@@ -706,25 +685,10 @@ class MultiPropertyAutomation:
                 - (False, "failed"): 실패
         """
         try:
-            # 종료매물 전체 개수 조회 및 최대 페이지 계산
-            max_pages = 1
-            try:
-                total_count_element = await page.query_selector('#wrap > div.container > div > div > div.sectionWrap > div.statusWrap.ver3 > div.statusItem.statusAdEnd.GTM_offerings_ad_list_end_ad > span.cnt')
-                if total_count_element:
-                    total_count_text = await total_count_element.inner_text()
-                    total_count = int(total_count_text.strip().replace(',', ''))
-                    max_pages = (total_count + 49) // 50  # 50개씩, 올림
-                    print(f"   📊 종료매물: {total_count}개 → 최대 {max_pages}페이지까지 검색")
-                else:
-                    print(f"   ⚠️ 종료매물 개수 확인 실패 - 최대 {max_pages}페이지까지 검색")
-            except Exception as e:
-                print(f"   ⚠️ 종료매물 개수 조회 실패: {e} - 최대 {max_pages}페이지까지 검색")
-
-            # 페이지네이션을 통한 매물 검색
             found = False
             current_page = 1
 
-            while not found and current_page <= max_pages:
+            while not found:
                 print(f"   📄 종료매물 {current_page}페이지에서 검색 중...")
 
                 end_rows = await page.query_selector_all('table tbody tr')
@@ -737,27 +701,32 @@ class MultiPropertyAutomation:
                             print(f"   🎯 종료매물에서 매물번호 {property_number} 발견! ({current_page}페이지)")
                             found = True
 
-                            # 💾 numberA 추출 및 저장 (결제대기 상태 매물 검색용)
-                            try:
-                                number_cell_A = await row.query_selector('td:nth-child(3) > div.numberA')
-                                if number_cell_A:
-                                    number_A_text = await number_cell_A.inner_text()
-                                    number_A = number_A_text.strip()
-                                    self.number_mapping[property_number] = number_A
-                                    print(f"   💾 numberA 저장: {property_number} -> {number_A}")
-                                else:
-                                    print(f"   ⚠️ numberA를 찾을 수 없습니다.")
-                            except Exception as e:
-                                print(f"   ⚠️ numberA 추출 중 오류: {e}")
-
-                            # 팝업 메시지 초기화
                             if popup_messages is not None:
                                 popup_messages.clear()
 
-                            # 팝업 제거
                             await self.remove_popups(page)
 
-                            # 재광고 버튼 클릭
+                            try:
+                                fullname_selectors = [
+                                    'td.danjiName p.fullName span',
+                                    'p.fullName span',
+                                    '.fullName span'
+                                ]
+                                fullname = None
+                                for selector in fullname_selectors:
+                                    fullname_element = await row.query_selector(selector)
+                                    if fullname_element:
+                                        fullname_text = await fullname_element.inner_text()
+                                        fullname = fullname_text.strip()
+                                        if fullname:
+                                            self.fullname_mapping[property_number] = fullname
+                                            print(f"   🔖 fullName 저장: {property_number} → {fullname}")
+                                            break
+                                if not fullname:
+                                    print(f"   ⚠️ fullName을 찾을 수 없음 (결제 실패 시 재시도 불가)")
+                            except Exception as e:
+                                print(f"   ⚠️ fullName 추출 실패: {e}")
+
                             print(f"   🖱️ 재광고 버튼 클릭...")
                             re_ad_button = await row.query_selector('#reReg')
                             if not re_ad_button:
@@ -768,22 +737,9 @@ class MultiPropertyAutomation:
                             await page.wait_for_timeout(1000)
                             print(f"   ✅ 재광고 버튼 클릭 완료")
 
-                            # 광고등록 페이지 처리
                             print(f"   📝 광고등록 페이지 처리...")
                             await page.wait_for_url('**/offerings/ad_regist', timeout=30000)
                             await page.wait_for_timeout(500)
-
-                            # 🔖 광고등록 페이지에서 fullName 추출 및 저장
-                            try:
-                                fullname_element = await page.query_selector('p.fullName span.pre-wrap')
-                                if fullname_element:
-                                    fullname_text = await fullname_element.inner_text()
-                                    fullname = fullname_text.strip()
-                                    if fullname:
-                                        self.fullname_mapping[property_number] = fullname
-                                        print(f"   🔖 fullName 저장: {property_number} → {fullname}")
-                            except Exception as e:
-                                print(f"   ⚠️ fullName 추출 실패: {e}")
 
                             await page.click('text=광고하기')
 
@@ -794,7 +750,6 @@ class MultiPropertyAutomation:
                                 print(f"   ⚠️ 페이지 로딩 타임아웃 - 계속 진행")
                                 await page.wait_for_timeout(1000)
 
-                            # 결제 처리
                             payment_success, payment_status = await self.process_payment(page, property_number, popup_messages)
 
                             if payment_success:
@@ -807,19 +762,14 @@ class MultiPropertyAutomation:
                                 print(f"   ❌ 매물번호 {property_number} 결제 실패")
                                 return (False, "failed")
 
-                # 매물을 찾았으면 페이지네이션 중단
                 if found:
                     break
 
-                # 다음 페이지로 이동
-                if current_page < max_pages:
-                    print(f"   ⏭️  다음 페이지로 이동 중... ({current_page} → {current_page + 1})")
-                    if not await self.goto_next_page(page, current_page):
-                        print(f"   ⚠️ 다음 페이지 이동 실패 - 검색 종료")
-                        break
-                    current_page += 1
-                else:
+                print(f"   ⏭️  다음 페이지로 이동 중... ({current_page} → {current_page + 1})")
+                if not await self.goto_next_page(page, current_page):
+                    print(f"   ⚠️ 다음 페이지 이동 실패 - 검색 종료 (마지막 페이지)")
                     break
+                current_page += 1
 
             if not found:
                 print(f"   ❌ 종료매물에서 찾을 수 없음 (총 {current_page}페이지 검색)")
@@ -974,17 +924,18 @@ class MultiPropertyAutomation:
             bool: 다음 페이지 이동 성공 여부
         """
         try:
-            next_button = await page.query_selector('#wrap > div > div > div > div.sectionWrap > div.singleSection.listSection > div.pagination > span:nth-child(5) > a')
+            next_button = await page.query_selector('.pagination a.btnArrow.next')
             if next_button:
-                button_class = await next_button.get_attribute('class')
-                if button_class and 'disabled' in button_class:
+                next_data_value = await next_button.get_attribute('data-value')
+                if next_data_value and int(next_data_value) <= current_page:
                     return False
 
                 await next_button.click()
                 await page.wait_for_timeout(2000)
 
                 try:
-                    await page.wait_for_selector('table tbody tr.adComplete', timeout=15000)
+                    await page.wait_for_selector('table tbody tr', timeout=8000)
+                    await page.wait_for_timeout(500)
                     await self.remove_popups(page)
                     return True
                 except:
@@ -1308,20 +1259,6 @@ class MultiPropertyAutomation:
                     number_text = await number_cell.inner_text()
                     if property_number in number_text.strip():
                         print(f"   종료매물에서 매물번호 {property_number} 발견!")
-                        # Note: process_single_property()에서 이미 로켓등록 확인 후 노출종료했으므로 재확인 불필요
-
-                        # 💾 numberA 추출 및 저장 (결제대기 상태 매물 검색용)
-                        try:
-                            number_cell_A = await row.query_selector('td:nth-child(3) > div.numberA')
-                            if number_cell_A:
-                                number_A_text = await number_cell_A.inner_text()
-                                number_A = number_A_text.strip()
-                                self.number_mapping[property_number] = number_A
-                                print(f"   💾 numberA 저장: {property_number} -> {number_A}")
-                            else:
-                                print(f"   ⚠️ numberA를 찾을 수 없습니다.")
-                        except Exception as e:
-                            print(f"   ⚠️ numberA 추출 중 오류: {e}")
 
                         # 재광고 버튼 클릭 직전 팝업 제거 (시간 경과로 재생성된 팝업 제거)
                         await page.evaluate('''
@@ -1344,6 +1281,28 @@ class MultiPropertyAutomation:
                         ''')
                         print("   ✅ 재광고 버튼 클릭 전 팝업 제거 완료")
 
+                        # 🔖 재광고 버튼 클릭 전에 fullName 추출 및 저장 (결제 실패 시 재시도용)
+                        try:
+                            fullname_selectors = [
+                                'td.danjiName p.fullName span',
+                                'p.fullName span',
+                                '.fullName span'
+                            ]
+                            fullname = None
+                            for selector in fullname_selectors:
+                                fullname_element = await row.query_selector(selector)
+                                if fullname_element:
+                                    fullname_text = await fullname_element.inner_text()
+                                    fullname = fullname_text.strip()
+                                    if fullname:
+                                        self.fullname_mapping[property_number] = fullname
+                                        print(f"   🔖 fullName 저장: {property_number} → {fullname}")
+                                        break
+                            if not fullname:
+                                print(f"   ⚠️ fullName을 찾을 수 없음 (결제 실패 시 재시도 불가)")
+                        except Exception as e:
+                            print(f"   ⚠️ fullName 추출 실패: {e}")
+
                         re_ad_button = await row.query_selector('#reReg')
                         if re_ad_button:
                             await re_ad_button.click()
@@ -1363,12 +1322,10 @@ class MultiPropertyAutomation:
 
             await page.click('text=광고하기')
 
-            # ✅ Playwright API: 페이지 로드 상태 기반 대기 (시간 대신 조건 기반)
             try:
                 await page.wait_for_load_state('domcontentloaded', timeout=10000)
                 print("   ✅ 광고하기 버튼 클릭 완료 - 페이지 로딩 완료")
             except:
-                # 타임아웃되어도 계속 진행 (일부 사이트는 완전 로드 안될 수 있음)
                 print("   ⚠️ 페이지 로딩 타임아웃 - 계속 진행")
                 await page.wait_for_timeout(1000)
 
@@ -1663,11 +1620,21 @@ class MultiPropertyAutomation:
                                                 continue
 
                                             # fullName 추출 및 매칭
-                                            fullname_element = await row.query_selector('p.fullName span.pre-wrap')
-                                            if fullname_element:
-                                                fullname_text = await fullname_element.inner_text()
-                                                current_fullname = fullname_text.strip()
-
+                                            fullname_selectors = [
+                                                'td.danjiName p.fullName span',
+                                                'td.danjiName > div > p.fullName > span',
+                                                'p.fullName span'
+                                            ]
+                                            current_fullname = None
+                                            for selector in fullname_selectors:
+                                                fullname_element = await row.query_selector(selector)
+                                                if fullname_element:
+                                                    fullname_text = await fullname_element.inner_text()
+                                                    current_fullname = fullname_text.strip()
+                                                    if current_fullname:
+                                                        break
+                                            
+                                            if current_fullname:
                                                 # fullName 매칭 확인
                                                 if current_fullname == saved_fullname:
                                                     print(f"   🎯 fullName 매칭 성공: {current_fullname}")
@@ -1847,8 +1814,11 @@ class MultiPropertyAutomation:
                         if idx < len(failed_payments):
                             await page.wait_for_timeout(1000)
 
-                # 최종 결과 집계
-                total_success = sum(1 for success in payment_results.values() if success)
+                # 최종 결과 집계 (payment_results 값이 (bool, str) 튜플이므로 첫 번째 값 체크)
+                total_success = sum(
+                    1 for result in payment_results.values() 
+                    if isinstance(result, tuple) and result[0] == True
+                )
                 total_failed = len(self.property_numbers) - total_success
 
                 # 최종 결과 출력
@@ -1857,10 +1827,16 @@ class MultiPropertyAutomation:
                 print(f"✅ 최종 성공: {total_success}/{len(self.property_numbers)}개")
 
                 if total_failed > 0:
-                    failed_list = [
-                        prop_num for prop_num in self.property_numbers
-                        if prop_num not in payment_results or not payment_results.get(prop_num, False)
-                    ]
+                    failed_list = []
+                    for prop_num in self.property_numbers:
+                        result = payment_results.get(prop_num)
+                        if result is None:
+                            failed_list.append(prop_num)
+                        elif isinstance(result, tuple):
+                            if not result[0]:
+                                failed_list.append(prop_num)
+                        elif not result:
+                            failed_list.append(prop_num)
                     print(f"❌ 최종 실패: {', '.join(failed_list)}")
                 else:
                     print("🎉 모든 매물 처리 완료!")

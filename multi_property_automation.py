@@ -833,7 +833,19 @@ class MultiPropertyAutomation:
                 print(f"   ❌ 체크박스 클릭 실패")
                 return (False, "failed")
 
-            # 결제하기 버튼 클릭
+            try:
+                await page.wait_for_selector('input[name="paymentMethod"]:checked', state='attached', timeout=10000)
+                print(f"   ✅ 결제수단 선택 확인 완료")
+            except Exception as e:
+                print(f"   ⚠️ 결제수단 선택 대기 중 타임아웃 - 충전금 직접 선택 시도")
+                try:
+                    await page.click('#paymentMethod1')
+                    await page.wait_for_timeout(500)
+                    print(f"   ✅ 충전금 결제수단 직접 선택 완료")
+                except Exception as click_error:
+                    print(f"   ❌ 결제수단 선택 실패: {click_error}")
+                    return (False, "failed")
+
             payment_button = await page.query_selector('#naverSendSave')
             if not payment_button:
                 print(f"   ❌ 결제하기 버튼을 찾을 수 없음")
@@ -1387,35 +1399,38 @@ class MultiPropertyAutomation:
             # ✅ "로켓전송이 완료되었습니다" alert 대기 (최대 20초)
             print("   ⏳ 결제 완료 대기 중...")
             payment_success = False
+            saved_message_found = False
             wait_time = 0
-            max_wait = 20  # 최대 20초 대기
+            max_wait = 20
 
             while wait_time < max_wait:
                 await page.wait_for_timeout(1000)
                 wait_time += 1
 
-                # 팝업 메시지 확인
                 if popup_messages is not None:
                     for msg in popup_messages:
                         if "로켓전송이 완료되었습니다" in msg:
                             print(f"   ✅ 결제 성공 확인: {msg}")
                             payment_success = True
                             break
+                        elif "매물을 저장 하였습니다" in msg:
+                            saved_message_found = True
 
                 if payment_success:
                     break
 
-                # "동의해 주세요" 메시지가 나오면 실패
                 if popup_messages is not None:
                     for msg in popup_messages:
                         if "동의해 주세요" in msg or "동의" in msg:
                             print(f"   ❌ 체크박스 미동의로 결제 실패: {msg}")
                             return (False, "exposure_ended")
 
-            # 성공 메시지 확인
             if not payment_success:
                 print(f"   ❌ 결제 완료 확인 실패 - '로켓전송이 완료되었습니다' alert를 받지 못함")
                 print(f"   📋 받은 팝업 메시지: {popup_messages if popup_messages else '없음'}")
+                if saved_message_found:
+                    print(f"   🔄 매물이 저장되었으나 결제는 미완료 - 재시도 필요")
+                    return (False, "saved")
                 return (False, "exposure_ended")
 
             print(f"🎉 매물번호 {property_number} 실제 업데이트 완료!")
@@ -1647,27 +1662,15 @@ class MultiPropertyAutomation:
                                                     # 팝업 제거
                                                     await self.remove_popups(page)
 
-                                                    # 광고하기 버튼(#naverAd) 클릭
                                                     print(f"   🖱️ 광고하기 버튼 클릭...")
                                                     await ad_button.click()
                                                     await page.wait_for_timeout(1000)
                                                     print(f"   ✅ 광고하기 버튼 클릭 완료")
 
-                                                    # 광고등록 페이지 처리
-                                                    print(f"   📝 광고등록 페이지 처리...")
-                                                    await page.wait_for_url('**/offerings/ad_regist', timeout=30000)
-                                                    await page.wait_for_timeout(500)
+                                                    print(f"   ⏳ 결제 페이지 로딩 대기 중...")
+                                                    await page.wait_for_selector('#consentMobile2', state='attached', timeout=15000)
+                                                    print(f"   ✅ 결제 페이지 이동 완료")
 
-                                                    await page.click('text=광고하기')
-
-                                                    try:
-                                                        await page.wait_for_load_state('domcontentloaded', timeout=10000)
-                                                        print(f"   ✅ 광고하기 버튼 클릭 완료")
-                                                    except:
-                                                        print(f"   ⚠️ 페이지 로딩 타임아웃 - 계속 진행")
-                                                        await page.wait_for_timeout(1000)
-
-                                                    # 결제 처리
                                                     payment_success, payment_status = await self.process_payment(page, property_number, popup_messages)
 
                                                     if payment_success:

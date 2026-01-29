@@ -902,6 +902,11 @@ class MultiPropertyAutomation:
 
         except Exception as e:
             print(f"   ❌ 결제 처리 중 오류: {e}")
+            if popup_messages is not None:
+                for msg in popup_messages:
+                    if "매물을 저장 하였습니다" in msg:
+                        print(f"   🔄 예외 발생했지만 매물 저장됨 확인 - saved 상태로 재시도 가능")
+                        return (False, "saved")
             return (False, "failed")
 
     async def remove_popups(self, page):

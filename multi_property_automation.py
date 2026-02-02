@@ -505,7 +505,7 @@ class MultiPropertyAutomation:
                                         ad_type_text = await ad_type_cell.inner_text()
                                         if "로켓등록" not in ad_type_text:
                                             print(f"   ❌ 로켓등록 상품이 아님 (광고유형: {ad_type_text.strip()})")
-                                            result[property_number] = (False, None)
+                                            result[property_number] = (False, "not_rocket")
                                             property_found = True
                                             break
 
@@ -1577,10 +1577,13 @@ class MultiPropertyAutomation:
                             # 노출종료는 성공했지만 결제는 실패 (status에 따라 분류)
                             failed_payments[prop_num] = status  # "saved" 또는 "failed"
 
-                # 노출종료 실패한 매물도 재시도 대상에 추가
-                for prop_num, (success, _) in exposure_results.items():
+                # 노출종료 실패한 매물도 재시도 대상에 추가 (로켓등록 아닌 매물은 제외)
+                for prop_num, (success, status) in exposure_results.items():
                     if not success:
-                        failed_payments[prop_num] = "failed"  # 노출종료 실패
+                        if status == "not_rocket":
+                            print(f"   ⏭️ 매물번호 {prop_num}: 로켓등록 상품이 아님 - 재시도 제외")
+                            continue
+                        failed_payments[prop_num] = "failed"
 
                 if failed_payments:
                     print(f"\n🔄 실패 매물 재시도 ({len(failed_payments)}개)")

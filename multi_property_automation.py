@@ -22,8 +22,8 @@ class MultiPropertyAutomation:
         
         self.test_mode = os.getenv('TEST_MODE', 'false').lower() == 'true'
 
-        # numberN → fullName 매핑 저장 (결제 실패 시 재시도용)
-        self.fullname_mapping = {}  # {numberN: fullName}
+        self.fullname_mapping = {}
+        self.property_name_mapping = {}
 
         print(f"🔧 로그인 ID: {self.login_id}")
         print(f"🏠 처리할 매물: {len(self.property_numbers)}개")
@@ -405,7 +405,6 @@ class MultiPropertyAutomation:
             return (False, "failed")
     
     async def print_property_info(self, row, property_number):
-        """매물 정보 출력"""
         try:
             cells = await row.query_selector_all('td')
             if len(cells) >= 6:
@@ -413,9 +412,12 @@ class MultiPropertyAutomation:
                 trade_type = await cells[3].inner_text() if len(cells) > 3 else "알 수 없음"
                 price = await cells[4].inner_text() if len(cells) > 4 else "알 수 없음"
                 
+                clean_name = name.strip().split('\n')[0].strip()
+                self.property_name_mapping[property_number] = clean_name
+                
                 print(f"📋 매물 정보:")
                 print(f"   번호: {property_number}")
-                print(f"   매물명: {name.strip()}")
+                print(f"   매물명: {clean_name}")
                 print(f"   거래종류: {trade_type.strip()}")
                 print(f"   가격: {price.strip()}")
         except Exception as e:
@@ -565,29 +567,44 @@ class MultiPropertyAutomation:
                 print(f"   ❌ 노출종료 버튼을 찾을 수 없습니다.")
                 return False
 
-            # 팝업 메시지 초기화
             if popup_messages is not None:
                 popup_messages.clear()
 
             await end_button.click()
             print(f"   ✅ 노출종료 버튼 클릭 완료")
 
-            # 팝업 처리 대기 및 성공/실패 확인
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(500)
 
-            # 팝업 메시지 확인
-            if popup_messages is not None:
-                for msg in popup_messages:
-                    if "네이버에서 노출종료 했어요" in msg or "노출종료" in msg and "실패" not in msg:
-                        print(f"   ✅ 노출종료 성공: {msg}")
-                        return True
-                    elif "노출종료에 실패" in msg or "통신 중 오류" in msg:
-                        print(f"   ❌ 노출종료 실패: {msg}")
-                        return False
+            max_wait = 10
+            wait_time = 0
+            success = False
+            failed = False
 
-            # 팝업 메시지가 없거나 명확하지 않은 경우 - 기본적으로 실패 처리
-            print(f"   ⚠️ 노출종료 결과 확인 불가 (팝업 메시지: {popup_messages if popup_messages else '없음'})")
-            return False
+            while wait_time < max_wait:
+                if popup_messages is not None:
+                    for msg in popup_messages:
+                        if "노출종료 했어요" in msg:
+                            print(f"   ✅ 노출종료 성공 확인: {msg}")
+                            success = True
+                            break
+                        elif "노출종료에 실패" in msg or "통신 중 오류" in msg:
+                            print(f"   ❌ 노출종료 실패: {msg}")
+                            failed = True
+                            break
+
+                if success or failed:
+                    break
+
+                await page.wait_for_timeout(500)
+                wait_time += 0.5
+
+            if success:
+                return True
+            elif failed:
+                return False
+            else:
+                print(f"   ⚠️ 노출종료 결과 확인 타임아웃 (팝업 메시지: {popup_messages if popup_messages else '없음'})")
+                return False
 
         except Exception as e:
             print(f"   ❌ 노출종료 실패: {e}")
@@ -1525,15 +1542,21 @@ class MultiPropertyAutomation:
                 # 1단계: 모든 매물 노출종료
                 exposure_results = await self.batch_end_exposure(page, popup_messages)
 
-                # 노출종료 성공한 매물만 추출
                 successful_exposures = [
                     prop_num for prop_num, (success, _) in exposure_results.items() if success
                 ]
 
-                # 노출종료 실패한 매물 출력
                 failed_exposures = [
                     prop_num for prop_num, (success, _) in exposure_results.items() if not success
                 ]
+
+                exposure_fail_reasons = {}
+                for prop_num, (success, status) in exposure_results.items():
+                    if not success:
+                        if status == "not_rocket":
+                            exposure_fail_reasons[prop_num] = "로켓등록 상품 아님"
+                        else:
+                            exposure_fail_reasons[prop_num] = "노출종료 실패"
 
                 if successful_exposures:
                     print(f"\n✅ 노출종료 성공 매물: {len(successful_exposures)}개")
@@ -1547,15 +1570,19 @@ class MultiPropertyAutomation:
                 if not successful_exposures:
                     print("\n❌ 노출종료 성공한 매물이 없습니다.")
 
-                    # 최종 결과 출력 (워크플로우가 감지할 수 있도록)
                     print("\n" + "="*80)
                     print("📊 다중 매물 자동화 완료 (배치 모드)!")
                     print(f"✅ 최종 성공: 0/{len(self.property_numbers)}개")
                     print(f"❌ 최종 실패: {', '.join(self.property_numbers)}")
+                    print("\n📋 실패 상세:")
+                    for prop_num in self.property_numbers:
+                        prop_name = self.property_name_mapping.get(prop_num, '매물명 미확인')
+                        reason = exposure_fail_reasons.get(prop_num, '노출종료 실패')
+                        print(f"FAIL_DETAIL:{prop_num}|{prop_name}|{reason}")
                     print("="*80)
 
                     await browser.close()
-                    sys.exit(0)  # exit code 0으로 정상 종료 (매물 실패는 로그로 표시됨)
+                    sys.exit(0)
 
                 # 2-3단계: 노출종료 성공한 매물들만 재광고/결제 (배치 처리)
                 # property_numbers를 임시로 성공한 매물로 교체
@@ -1832,7 +1859,6 @@ class MultiPropertyAutomation:
                 )
                 total_failed = len(self.property_numbers) - total_success
 
-                # 최종 결과 출력
                 print("\n" + "="*80)
                 print("📊 다중 매물 자동화 완료 (배치 모드)!")
                 print(f"✅ 최종 성공: {total_success}/{len(self.property_numbers)}개")
@@ -1849,6 +1875,24 @@ class MultiPropertyAutomation:
                         elif not result:
                             failed_list.append(prop_num)
                     print(f"❌ 최종 실패: {', '.join(failed_list)}")
+                    print("\n📋 실패 상세:")
+                    for prop_num in failed_list:
+                        prop_name = self.property_name_mapping.get(prop_num, '매물명 미확인')
+                        result = payment_results.get(prop_num)
+                        if result is None:
+                            reason = exposure_fail_reasons.get(prop_num, '처리 안됨')
+                        elif isinstance(result, tuple):
+                            status = result[1]
+                            reason_map = {
+                                'saved': '광고 저장됨(결제 미완료)',
+                                'failed': '결제 실패',
+                                'not_found': '종료매물에서 미발견',
+                                'exposure_ended': '노출종료 후 재광고 실패',
+                            }
+                            reason = reason_map.get(status, status)
+                        else:
+                            reason = '처리 실패'
+                        print(f"FAIL_DETAIL:{prop_num}|{prop_name}|{reason}")
                 else:
                     print("🎉 모든 매물 처리 완료!")
 

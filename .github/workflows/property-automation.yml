@@ -364,36 +364,21 @@ jobs:
       continue-on-error: true
       run: |
         if [ -f "./logs/automation.log" ]; then
-          # 실패 단계별 상세 정보 추출
-          stage_details=""
+          fail_details=""
 
-          # 노출종료 실패
-          if grep -q "📋 노출종료 실패:" ./logs/automation.log; then
-            exposure_failed=$(grep "📋 노출종료 실패:" ./logs/automation.log | tail -1 | sed 's/.*📋 노출종료 실패: //')
-            stage_details="${stage_details}\n📋 노출종료 실패: ${exposure_failed}"
+          while IFS= read -r line; do
+            prop_num=$(echo "$line" | cut -d'|' -f1 | sed 's/FAIL_DETAIL://')
+            prop_name=$(echo "$line" | cut -d'|' -f2)
+            reason=$(echo "$line" | cut -d'|' -f3)
+            fail_details="${fail_details}${prop_num}(${prop_name}/${reason}),\n"
+          done < <(grep "^FAIL_DETAIL:" ./logs/automation.log)
+
+          if [ -z "$fail_details" ]; then
+            fail_details="상세 정보 없음"
           fi
 
-          # 광고 저장됨 (결제 안됨)
-          if grep -q "📝 광고 저장됨(결제안됨):" ./logs/automation.log; then
-            saved_failed=$(grep "📝 광고 저장됨(결제안됨):" ./logs/automation.log | tail -1 | sed 's/.*📝 광고 저장됨(결제안됨): //')
-            stage_details="${stage_details}\n📝 광고 저장됨(결제안됨): ${saved_failed}"
-          fi
-
-          # 충전금 부족
-          if grep -q "💰 충전금 부족:" ./logs/automation.log; then
-            insufficient_failed=$(grep "💰 충전금 부족:" ./logs/automation.log | tail -1 | sed 's/.*💰 충전금 부족: //')
-            stage_details="${stage_details}\n💰 충전금 부족: ${insufficient_failed}"
-          fi
-
-          # 결제 실패
-          if grep -q "💳 결제 실패:" ./logs/automation.log; then
-            payment_failed=$(grep "💳 결제 실패:" ./logs/automation.log | tail -1 | sed 's/.*💳 결제 실패: //')
-            stage_details="${stage_details}\n💳 결제 실패: ${payment_failed}"
-          fi
-
-          # 멀티라인 출력을 위한 처리
           echo "stage_details<<EOF" >> $GITHUB_OUTPUT
-          echo -e "${stage_details}" >> $GITHUB_OUTPUT
+          echo -e "${fail_details}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
         else
           echo "stage_details=로그 파일 없음" >> $GITHUB_OUTPUT
@@ -404,25 +389,24 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          const repository = '${{ github.repository }}';
-          const runId = '${{ github.run_id }}';
-          const eventName = '${{ github.event_name }}';
-          const workflow = '${{ github.workflow }}';
-
-          const failedProperties = '${{ needs.automation.outputs.failed_properties }}' || '없음';
           const successCount = '${{ needs.automation.outputs.success_count }}' || '0';
           const totalCount = '${{ needs.automation.outputs.total_count }}' || '0';
           const failedCount = totalCount - successCount;
           const stageDetails = `${{ steps.extract_stages.outputs.stage_details }}` || '상세 정보 없음';
 
+          const lines = stageDetails.trim().split('\n').filter(l => l.trim());
+          let failList = '';
+          for (const line of lines) {
+            failList += '- ' + line.trim() + '\n';
+          }
+          if (!failList) failList = '상세 정보 없음';
+
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: '매물 처리 실패 - ' + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
+            title: `매물 처리 실패 (${failedCount}/${totalCount}개) - ` + new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
             labels: ['automation-error', 'property-failure'],
-            body: "**처리 결과:** " + failedCount + "/" + totalCount + "개 실패\n\n" +
-              "**실패 매물 번호:** " + failedProperties + "\n\n" +
-              "**실패 단계별 상세:**\n" + stageDetails
+            body: `**처리 결과:** ${failedCount}/${totalCount}개 실패\n\n**실패 매물 상세:**\n${failList}`
           })
         github-token: ${{ secrets.GITHUB_TOKEN }}
 

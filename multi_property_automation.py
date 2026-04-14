@@ -1559,6 +1559,10 @@ class MultiPropertyAutomation:
                     if not success:
                         if status == "not_rocket":
                             exposure_fail_reasons[prop_num] = "로켓등록 상품 아님"
+                        elif status is None:
+                            exposure_fail_reasons[prop_num] = "매물을 찾을 수 없습니다"
+                        elif status == "error":
+                            exposure_fail_reasons[prop_num] = "처리 중 오류 발생"
                         else:
                             exposure_fail_reasons[prop_num] = "노출종료 실패"
 

@@ -482,63 +482,67 @@ class MultiPropertyAutomation:
             for idx, property_number in enumerate(self.property_numbers, 1):
                 print(f"\n[{idx}/{len(self.property_numbers)}] 매물번호 {property_number} 검색 중...")
 
-                await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
-                await page.wait_for_selector('table tbody tr.adComplete', timeout=30000)
-                await self.remove_popups(page)
+                try:
+                    await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
+                    await page.wait_for_selector('table tbody tr.adComplete', timeout=30000)
+                    await self.remove_popups(page)
 
-                property_found = False
-                current_page = 1
+                    property_found = False
+                    current_page = 1
 
-                while not property_found:
-                    print(f"   📄 {current_page}페이지에서 검색 중...")
+                    while not property_found:
+                        print(f"   📄 {current_page}페이지에서 검색 중...")
 
-                    rows = await page.query_selector_all('table tbody tr.adComplete')
+                        rows = await page.query_selector_all('table tbody tr.adComplete')
 
-                    for row in rows:
-                        try:
-                            number_cell = await row.query_selector('td:nth-child(3) > div.numberN')
-                            if number_cell:
-                                number_text = await number_cell.inner_text()
-                                if property_number in number_text.strip():
-                                    print(f"   🎯 매물번호 {property_number} 발견!")
+                        for row in rows:
+                            try:
+                                number_cell = await row.query_selector('td:nth-child(3) > div.numberN')
+                                if number_cell:
+                                    number_text = await number_cell.inner_text()
+                                    if property_number in number_text.strip():
+                                        print(f"   🎯 매물번호 {property_number} 발견!")
 
-                                    ad_type_cell = await row.query_selector('td:nth-child(8)')
-                                    if ad_type_cell:
-                                        ad_type_text = await ad_type_cell.inner_text()
-                                        if "로켓등록" not in ad_type_text:
-                                            print(f"   ❌ 로켓등록 상품이 아님 (광고유형: {ad_type_text.strip()})")
-                                            result[property_number] = (False, "not_rocket")
+                                        ad_type_cell = await row.query_selector('td:nth-child(8)')
+                                        if ad_type_cell:
+                                            ad_type_text = await ad_type_cell.inner_text()
+                                            if "로켓등록" not in ad_type_text:
+                                                print(f"   ❌ 로켓등록 상품이 아님 (광고유형: {ad_type_text.strip()})")
+                                                result[property_number] = (False, "not_rocket")
+                                                property_found = True
+                                                break
+
+                                        await self.print_property_info(row, property_number)
+
+                                        if self.test_mode:
+                                            print(f"   🧪 [테스트 모드] 노출종료 시뮬레이션")
+                                            result[property_number] = (True, None)
                                             property_found = True
                                             break
 
-                                    await self.print_property_info(row, property_number)
-
-                                    if self.test_mode:
-                                        print(f"   🧪 [테스트 모드] 노출종료 시뮬레이션")
-                                        result[property_number] = (True, None)
+                                        success = await self.execute_single_exposure_end(page, row, property_number, popup_messages)
+                                        result[property_number] = (success, None)
                                         property_found = True
                                         break
+                            except Exception as e:
+                                print(f"   ⚠️ 행 처리 중 오류: {e}")
+                                continue
 
-                                    success = await self.execute_single_exposure_end(page, row, property_number, popup_messages)
-                                    result[property_number] = (success, None)
-                                    property_found = True
-                                    break
-                        except Exception as e:
-                            print(f"   ⚠️ 행 처리 중 오류: {e}")
-                            continue
+                        if property_found:
+                            break
 
-                    if property_found:
-                        break
+                        if not await self.goto_next_page(page, current_page):
+                            break
+                        current_page += 1
 
-                    if not await self.goto_next_page(page, current_page):
-                        break
-                    current_page += 1
+                    if not property_found:
+                        print(f"   ❌ 매물번호 {property_number}를 찾을 수 없습니다.")
+                        result[property_number] = (False, None)
 
-                if not property_found:
-                    print(f"   ❌ 매물번호 {property_number}를 찾을 수 없습니다.")
-                    result[property_number] = (False, None)
+                except Exception as e:
+                    print(f"   ❌ 매물번호 {property_number} 처리 중 오류 (재시도 대상): {e}")
+                    result[property_number] = (False, "error")
 
-                # 매물 간 대기
                 if idx < len(self.property_numbers):
                     await page.wait_for_timeout(1000)
 

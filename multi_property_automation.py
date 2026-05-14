@@ -29,6 +29,12 @@ class MultiPropertyAutomation:
         print(f"🏠 처리할 매물: {len(self.property_numbers)}개")
         print(f"📋 매물번호: {', '.join(self.property_numbers)}")
         print(f"🧪 테스트 모드: {self.test_mode}")
+
+    def mask_property_name(self, name):
+        """이름 완전 마스킹 (로그/Actions UI 보호용)"""
+        if not name or name == "알 수 없음":
+            return name
+        return "***"
     
     async def login(self, page):
         """로그인 처리"""
@@ -205,7 +211,7 @@ class MultiPropertyAutomation:
 
                     # 🎯 스마트 대기: 종료매물 테이블이 로딩될 때까지 대기
                     print("⏳ 종료매물 목록 로딩 대기 중...")
-                    await page.wait_for_selector('table tbody tr', state='visible', timeout=10000)
+                    await page.wait_for_selector('table tbody tr', state='visible', timeout=30000)
                     print("✅ 종료매물 목록 로딩 완료")
 
                     # 종료매물 목록 로딩 후 팝업 제거
@@ -408,18 +414,31 @@ class MultiPropertyAutomation:
         try:
             cells = await row.query_selector_all('td')
             if len(cells) >= 6:
-                name = await cells[1].inner_text() if len(cells) > 1 else "알 수 없음"
                 trade_type = await cells[3].inner_text() if len(cells) > 3 else "알 수 없음"
-                price = await cells[4].inner_text() if len(cells) > 4 else "알 수 없음"
                 
-                clean_name = name.strip().split('\n')[0].strip()
+                # 매물명 추출 (주로 5번째 가격/소재지 컬럼에 이름이 포함됨)
+                location_name_raw = await cells[4].inner_text() if len(cells) > 4 else "알 수 없음"
+                # "상일동\n\n고덕아르테온 307동 1103호" 형식 처리
+                parts = [p.strip() for p in location_name_raw.split('\n') if p.strip()]
+                clean_name = parts[-1] if parts and (parts[-1] != "알 수 없음") else "알 수 없음"
+                
+                # 그래도 알 수 없으면 2번째 칸 시도
+                if clean_name == "알 수 없음":
+                    fallback_name = await cells[1].inner_text() if len(cells) > 1 else "알 수 없음"
+                    clean_name = fallback_name.strip().split('\n')[0].strip()
+
                 self.property_name_mapping[property_number] = clean_name
+                masked_name = self.mask_property_name(clean_name)
                 
                 print(f"📋 매물 정보:")
                 print(f"   번호: {property_number}")
-                print(f"   매물명: {clean_name}")
+                print(f"   매물명: {masked_name}")
                 print(f"   거래종류: {trade_type.strip()}")
-                print(f"   가격: {price.strip()}")
+                
+                # 기존에 엉뚱하게 출력되던 가격/소재지 출력 부분 제거/마스킹
+                # 가격만 분리하려면 첫 부분을 씀
+                price_only = parts[0] if parts else "알 수 없음"
+                print(f"   가격/소재지: {price_only}")
         except Exception as e:
             print(f"⚠️ 매물 정보 추출 중 오류: {e}")
     
@@ -641,7 +660,7 @@ class MultiPropertyAutomation:
 
             # 종료매물 목록 로딩 대기
             print("⏳ 종료매물 목록 로딩 대기 중...")
-            await page.wait_for_selector('table tbody tr', state='visible', timeout=10000)
+            await page.wait_for_selector('table tbody tr', state='visible', timeout=30000)
             await self.remove_popups(page)
             print("✅ 종료매물 목록 로딩 완료")
 
@@ -659,16 +678,21 @@ class MultiPropertyAutomation:
 
                 # 종료매물 리스트로 다시 이동 (이전 처리 후 페이지 변경됨)
                 if idx > 1:
-                    await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
-                    await page.wait_for_selector('table tbody tr', state='visible', timeout=30000)
-                    await self.remove_popups(page)
+                    try:
+                        await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
+                        await page.wait_for_selector('table tbody tr', state='visible', timeout=30000)
+                        await self.remove_popups(page)
 
-                    # 광고종료 버튼 클릭
-                    ad_end_button = await page.wait_for_selector('.statusAdEnd', timeout=10000)
-                    await ad_end_button.click()
-                    await page.wait_for_selector('table tbody tr', state='visible', timeout=10000)
-                    await self.remove_popups(page)
-                    await page.wait_for_timeout(1000)
+                        # 광고종료 버튼 클릭
+                        ad_end_button = await page.wait_for_selector('.statusAdEnd', timeout=10000)
+                        await ad_end_button.click()
+                        await page.wait_for_selector('table tbody tr', state='visible', timeout=30000)
+                        await self.remove_popups(page)
+                        await page.wait_for_timeout(1000)
+                    except Exception as e:
+                        print(f"   ❌ 종료매물 리스트 이동/로딩 실패: {e}")
+                        result[property_number] = (False, "failed")
+                        continue
 
                 # 테스트 모드 처리
                 if self.test_mode:
@@ -741,7 +765,7 @@ class MultiPropertyAutomation:
                                         fullname = fullname_text.strip()
                                         if fullname:
                                             self.fullname_mapping[property_number] = fullname
-                                            print(f"   🔖 fullName 저장: {property_number} → {fullname}")
+                                            print(f"   🔖 fullName 저장: {property_number} → {self.mask_property_name(fullname)}")
                                             break
                                 if not fullname:
                                     print(f"   ⚠️ fullName을 찾을 수 없음 (결제 실패 시 재시도 불가)")
@@ -1334,7 +1358,7 @@ class MultiPropertyAutomation:
                                     fullname = fullname_text.strip()
                                     if fullname:
                                         self.fullname_mapping[property_number] = fullname
-                                        print(f"   🔖 fullName 저장: {property_number} → {fullname}")
+                                        print(f"   🔖 fullName 저장: {property_number} → {self.mask_property_name(fullname)}")
                                         break
                             if not fullname:
                                 print(f"   ⚠️ fullName을 찾을 수 없음 (결제 실패 시 재시도 불가)")
@@ -1583,10 +1607,21 @@ class MultiPropertyAutomation:
                     print(f"✅ 최종 성공: 0/{len(self.property_numbers)}개")
                     print(f"❌ 최종 실패: {', '.join(self.property_numbers)}")
                     print("\n📋 실패 상세:")
-                    for prop_num in self.property_numbers:
-                        prop_name = self.property_name_mapping.get(prop_num, '매물명 미확인')
-                        reason = exposure_fail_reasons.get(prop_num, '노출종료 실패')
-                        print(f"FAIL_DETAIL:{prop_num}|{prop_name}|{reason}")
+                    try:
+                        os.makedirs("results", exist_ok=True)
+                        with open("results/email_report.txt", "w", encoding="utf-8") as f:
+                            for prop_num in self.property_numbers:
+                                prop_name = self.property_name_mapping.get(prop_num, '매물명 미확인')
+                                reason = exposure_fail_reasons.get(prop_num, '노출종료 실패')
+                                f.write(f"{prop_num}({prop_name}/{reason}),\n")
+                                print(f"FAIL_DETAIL:{prop_num}|{self.mask_property_name(prop_name)}|{reason}")
+                    except Exception as e:
+                        print(f"이메일 리포트 파일 생성 실패: {e}")
+                        # fallback
+                        for prop_num in self.property_numbers:
+                            prop_name = self.property_name_mapping.get(prop_num, '매물명 미확인')
+                            reason = exposure_fail_reasons.get(prop_num, '노출종료 실패')
+                            print(f"FAIL_DETAIL:{prop_num}|{self.mask_property_name(prop_name)}|{reason}")
                     print("="*80)
 
                     await browser.close()
@@ -1640,7 +1675,7 @@ class MultiPropertyAutomation:
                                     print(f"   ℹ️ 광고등록 페이지까지 도달하지 못한 경우입니다.")
                                     continue
 
-                                print(f"   🔍 검색할 fullName: {saved_fullname}")
+                                print(f"   🔍 검색할 fullName: {self.mask_property_name(saved_fullname)}")
 
                                 # 매물 리스트 페이지로 이동
                                 await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
@@ -1695,7 +1730,7 @@ class MultiPropertyAutomation:
                                             if current_fullname:
                                                 # fullName 매칭 확인
                                                 if current_fullname == saved_fullname:
-                                                    print(f"   🎯 fullName 매칭 성공: {current_fullname}")
+                                                    print(f"   🎯 fullName 매칭 성공: {self.mask_property_name(current_fullname)}")
                                                     property_found = True
 
                                                     # 팝업 메시지 초기화
@@ -1737,7 +1772,7 @@ class MultiPropertyAutomation:
                                     current_page += 1
 
                                 if not property_found:
-                                    print(f"   ❌ fullName 매칭 실패: {saved_fullname}을(를) 찾을 수 없습니다.")
+                                    print(f"   ❌ fullName 매칭 실패: {self.mask_property_name(saved_fullname)}을(를) 찾을 수 없습니다.")
 
                             elif fail_status == "exposure_ended":
                                 # 노출종료 완료 → 종료매물에서 재시도
@@ -1884,6 +1919,13 @@ class MultiPropertyAutomation:
                             failed_list.append(prop_num)
                     print(f"❌ 최종 실패: {', '.join(failed_list)}")
                     print("\n📋 실패 상세:")
+                    try:
+                        os.makedirs("results", exist_ok=True)
+                        f = open("results/email_report.txt", "w", encoding="utf-8")
+                    except Exception as e:
+                        print(f"이메일 리포트 파일 생성 실패: {e}")
+                        f = None
+
                     for prop_num in failed_list:
                         prop_name = self.property_name_mapping.get(prop_num, '매물명 미확인')
                         result = payment_results.get(prop_num)
@@ -1900,7 +1942,13 @@ class MultiPropertyAutomation:
                             reason = reason_map.get(status, status)
                         else:
                             reason = '처리 실패'
-                        print(f"FAIL_DETAIL:{prop_num}|{prop_name}|{reason}")
+                        
+                        if f:
+                            f.write(f"{prop_num}({prop_name}/{reason}),\n")
+                        print(f"FAIL_DETAIL:{prop_num}|{self.mask_property_name(prop_name)}|{reason}")
+                    
+                    if f:
+                        f.close()
                 else:
                     print("🎉 모든 매물 처리 완료!")
 

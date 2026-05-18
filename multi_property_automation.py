@@ -690,8 +690,16 @@ class MultiPropertyAutomation:
                         await self.remove_popups(page)
                         await page.wait_for_timeout(1000)
                     except Exception as e:
-                        print(f"   ❌ 종료매물 리스트 이동/로딩 실패: {e}")
-                        result[property_number] = (False, "failed")
+                        error_msg = str(e)
+                        print(f"   ❌ 종료매물 리스트 이동/로딩 실패: {error_msg}")
+                        if popup_messages:
+                            last_popup = popup_messages[-1] if popup_messages else ''
+                            if '점검' in last_popup or '전송' in last_popup:
+                                result[property_number] = (False, "server_maintenance")
+                            else:
+                                result[property_number] = (False, "page_load_fail")
+                        else:
+                            result[property_number] = (False, "page_load_fail")
                         continue
 
                 # 테스트 모드 처리
@@ -776,7 +784,7 @@ class MultiPropertyAutomation:
                             re_ad_button = await row.query_selector('#reReg')
                             if not re_ad_button:
                                 print(f"   ❌ 재광고 버튼을 찾을 수 없습니다.")
-                                return (False, "failed")
+                                return (False, "no_readd_button")
 
                             await re_ad_button.click()
                             await page.wait_for_timeout(1000)
@@ -818,16 +826,21 @@ class MultiPropertyAutomation:
 
             if not found:
                 print(f"   ❌ 종료매물에서 찾을 수 없음 (총 {current_page}페이지 검색)")
+                if current_page == 1:
+                    return (False, "pagination_blocked")
                 return (False, "not_found")
 
         except Exception as e:
-            print(f"   ❌ 재광고/결제 중 오류: {e}")
+            error_msg = str(e)
+            print(f"   ❌ 재광고/결제 중 오류: {error_msg}")
             try:
                 await page.screenshot(path=f"error_ended_{property_number}.png")
                 print(f"   📸 오류 스크린샷 저장: error_ended_{property_number}.png")
             except:
                 pass
-            return (False, "failed")
+            if 'Timeout' in error_msg:
+                return (False, "timeout_error")
+            return (False, "process_error")
 
     async def process_payment(self, page, property_number, popup_messages=None):
         """결제 처리
@@ -980,11 +993,6 @@ class MultiPropertyAutomation:
             pass
 
     async def goto_next_page(self, page, current_page):
-        """다음 페이지로 이동
-
-        Returns:
-            bool: 다음 페이지 이동 성공 여부
-        """
         try:
             next_button = await page.query_selector('.pagination a.btnArrow.next')
             if next_button:
@@ -992,7 +1000,20 @@ class MultiPropertyAutomation:
                 if next_data_value and int(next_data_value) <= current_page:
                     return False
 
-                await next_button.click()
+                await self.remove_popups(page)
+
+                try:
+                    await next_button.click(timeout=5000)
+                except Exception:
+                    print(f"   ⚠️ 팝업 감지 - 재제거 후 강제 클릭 시도")
+                    await self.remove_popups(page)
+                    await page.wait_for_timeout(300)
+                    try:
+                        await next_button.click(force=True, timeout=5000)
+                    except Exception:
+                        print(f"   ⚠️ 강제 클릭도 실패 - JavaScript 직접 클릭 시도")
+                        await next_button.evaluate('el => el.click()')
+
                 await page.wait_for_timeout(2000)
 
                 try:
@@ -1637,17 +1658,14 @@ class MultiPropertyAutomation:
                 # 원래 매물 리스트 복원
                 self.property_numbers = original_property_numbers
 
-                # 재광고/결제 실패한 매물을 딕셔너리로 관리 (상태 포함)
                 failed_payments = {}
                 for prop_num in successful_exposures:
                     payment_result = payment_results.get(prop_num)
                     if payment_result:
                         success, status = payment_result
                         if not success:
-                            # 노출종료는 성공했지만 결제는 실패 (status에 따라 분류)
-                            failed_payments[prop_num] = status  # "saved" 또는 "failed"
+                            failed_payments[prop_num] = status
 
-                # 노출종료 실패한 매물도 재시도 대상에 추가 (로켓등록 아닌 매물은 제외)
                 for prop_num, (success, status) in exposure_results.items():
                     if not success:
                         if status == "not_rocket":
@@ -1774,23 +1792,19 @@ class MultiPropertyAutomation:
                                 if not property_found:
                                     print(f"   ❌ fullName 매칭 실패: {self.mask_property_name(saved_fullname)}을(를) 찾을 수 없습니다.")
 
-                            elif fail_status == "exposure_ended":
-                                # 노출종료 완료 → 종료매물에서 재시도
+                            elif property_number in successful_exposures:
                                 print(f"   📍 노출종료 완료됨 → 종료매물 목록에서 재시도")
 
-                                # 종료매물 리스트로 이동
                                 await page.goto(self.ad_list_url, timeout=60000, wait_until='domcontentloaded')
                                 await page.wait_for_selector('table tbody tr', state='visible', timeout=30000)
                                 await self.remove_popups(page)
 
-                                # 광고종료 버튼 클릭
                                 ad_end_button = await page.wait_for_selector('.statusAdEnd', timeout=10000)
                                 await ad_end_button.click()
                                 await page.wait_for_selector('table tbody tr', state='visible', timeout=10000)
                                 await self.remove_popups(page)
                                 await page.wait_for_timeout(1000)
 
-                                # 재광고/결제 재시도
                                 success, status = await self.process_single_ended_property(page, property_number, popup_messages)
 
                                 if success:
@@ -1938,6 +1952,12 @@ class MultiPropertyAutomation:
                                 'failed': '결제 실패',
                                 'not_found': '종료매물에서 미발견',
                                 'exposure_ended': '노출종료 후 재광고 실패',
+                                'server_maintenance': '네이버 서버 점검',
+                                'page_load_fail': '페이지 로딩 실패',
+                                'pagination_blocked': '팝업으로 페이지 이동 차단',
+                                'no_readd_button': '재광고 버튼 없음',
+                                'timeout_error': '타임아웃 오류',
+                                'process_error': '처리 중 오류',
                             }
                             reason = reason_map.get(status, status)
                         else:

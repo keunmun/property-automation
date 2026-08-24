@@ -792,6 +792,7 @@ class MultiPropertyAutomation:
 
                             print(f"   📝 광고등록 페이지 처리...")
                             await page.wait_for_url('**/offerings/ad_regist', timeout=30000)
+                            await self.remove_popups(page)
                             await page.wait_for_timeout(500)
 
                             await page.click('text=광고하기')
@@ -1075,9 +1076,9 @@ class MultiPropertyAutomation:
             await page.wait_for_timeout(1000)
             print("   ✅ 재광고 버튼 클릭 완료")
 
-            # 2. 광고등록 페이지 처리
             print("2️⃣ 광고등록 페이지 처리...")
             await page.wait_for_url('**/offerings/ad_regist', timeout=30000)
+            await self.remove_popups(page)
             await page.wait_for_timeout(500)
 
             await page.click('text=광고하기')
@@ -1398,9 +1399,9 @@ class MultiPropertyAutomation:
                 print(f"   ❌ 종료매물에서 매물번호 {property_number}를 찾을 수 없습니다.")
                 return (False, "exposure_ended")
 
-            # 4. 광고등록
             print("4️⃣ 광고등록 페이지 처리...")
             await page.wait_for_url('**/offerings/ad_regist', timeout=30000)
+            await self.remove_popups(page)
             await page.wait_for_timeout(500)
 
             await page.click('text=광고하기')
